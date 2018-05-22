@@ -78,9 +78,9 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
           request.binding.map { b =>
             logging.debug(this, "checking if package is accessible")
           }
-          val referencedentities = referencedEntities(request)
+          val referencedentities = referencedEntitiesMap(request)
 
-          onComplete(entitlementProvider.check(user, Privilege.READ, referencedentities)) {
+          onComplete(entitlementProvider.checkResources(user, Privilege.READ, referencedentities)) {
             case Success(_) =>
               putEntity(
                 WhiskPackage,

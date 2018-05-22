@@ -83,7 +83,7 @@ trait WhiskRulesApi extends WhiskCollectionAPI with ReferencedEntities {
     parameter('overwrite ? false) { overwrite =>
       entity(as[WhiskRulePut]) { content =>
         val request = content.resolve(entityName.namespace)
-        onComplete(entitlementProvider.check(user, Privilege.READ, referencedEntities(request))) {
+        onComplete(entitlementProvider.checkResources(user, Privilege.READ, referencedEntitiesMap(request))) {
           case Success(_) =>
             putEntity(
               WhiskRule,

@@ -223,6 +223,7 @@ object ConfigKeys {
   val userEvents = "whisk.user-events"
 
   val runtimes = "whisk.runtimes"
+  val runtimesWhitelists = s"${runtimes}.whitelists"
 
   val db = "whisk.db"
 
