@@ -68,11 +68,11 @@ trait BasicAuthorizedRouteProvider extends Directives {
   import RestApiCommons.jsonDefaultResponsePrinter
 
   /** Checks entitlement and dispatches to handler if authorized. */
-  protected def authorizeAndDispatch(method: HttpMethod, user: Identity, resource: Resource)(
-    implicit transid: TransactionId): RequestContext => Future[RouteResult] = {
+  protected def authorizeAndDispatch(method: HttpMethod, user: Identity, resource: Resource, resourceData:
+    Option[ResourceData] = None)(implicit transid: TransactionId): RequestContext => Future[RouteResult] = {
     val right = collection.determineRight(method, resource.entity)
 
-    onComplete(entitlementProvider.check(user, right, resource)) {
+    onComplete(entitlementProvider.checkResource(user, right, resource, resourceData)) {
       case Success(_) => dispatchOp(user, right, resource)
       case Failure(t) =>
         t match {

@@ -119,7 +119,14 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
   protected override def innerRoutes(user: Identity, ns: EntityPath)(implicit transid: TransactionId) = {
     (entityPrefix & entityOps & requestMethod) { (segment, m) =>
       entityname(segment) { outername =>
-        pathEnd {
+        (pathEnd & put & entity(as[WhiskActionPut])){ (content) =>
+          val request = content.resolve(user.namespace)
+          val resourceData = request.exec match {
+            case Some(e) => Some(ResourceData(e))
+            case None    => None
+          }
+          authorizeAndDispatch(m, user, Resource(ns, collection, Some(outername)), resourceData)
+        } ~ pathEnd {
           // matched /namespace/collection/name
           // this is an action in default package, authorize and dispatch
           authorizeAndDispatch(m, user, Resource(ns, collection, Some(outername)))
@@ -127,7 +134,7 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
           // matched GET /namespace/collection/package-name/
           // list all actions in package iff subject is entitled to READ package
           val resource = Resource(ns, Collection(Collection.PACKAGES), Some(outername))
-          onComplete(entitlementProvider.check(user, Privilege.READ, resource)) {
+          onComplete(entitlementProvider.checkResource(user, Privilege.READ, resource)) {
             case Success(_) => listPackageActions(user, FullyQualifiedEntityName(ns, EntityName(outername)))
             case Failure(f) => super.handleEntitlementFailure(f)
           }
@@ -139,7 +146,7 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
             val packageResource = Resource(ns.addPath(EntityName(outername)), collection, Some(innername))
 
             val right = collection.determineRight(m, Some(innername))
-            onComplete(entitlementProvider.check(user, right, packageResource)) {
+            onComplete(entitlementProvider.checkResource(user, right, packageResource)) {
               case Success(_) =>
                 getEntity(WhiskPackage.get(entityStore, packageDocId), Some {
                   if (right == Privilege.READ || right == Privilege.ACTIVATE) {
@@ -412,7 +419,7 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
     exec match {
       case Some(seq: SequenceExec) =>
         logging.debug(this, "checking if sequence components are accessible")
-        entitlementProvider.check(user, right, referencedEntities(seq), noThrottle = true)
+        entitlementProvider.checkResources(user, right, referencedEntitiesMap(seq), noThrottle = true)
       case _ => Future.successful(true)
     }
   }
@@ -422,7 +429,7 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
     exec match {
       case Some(seq: SequenceExecMetaData) =>
         logging.info(this, "checking if sequence components are accessible")
-        entitlementProvider.check(user, right, referencedEntities(seq), noThrottle = true)
+        entitlementProvider.checkResources(user, right, referencedEntitiesMap(seq), noThrottle = true)
       case _ => Future.successful(true)
     }
   }

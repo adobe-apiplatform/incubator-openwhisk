@@ -373,7 +373,7 @@ protected[actions] trait PrimitiveActions {
     implicit transid: TransactionId): Future[ActivationResponse] = {
     val resource = Resource(fqn.path, Collection(Collection.ACTIONS), Some(fqn.name.asString))
     entitlementProvider
-      .check(user, Privilege.ACTIVATE, Set(resource), noThrottle = true)
+      .checkResources(user, Privilege.ACTIVATE, Map(resource -> None), noThrottle = true)
       .flatMap { _ =>
         // successful entitlement check
         WhiskActionMetaData

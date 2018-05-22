@@ -22,6 +22,7 @@ import scala.collection.immutable.Set
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Failure
 import scala.util.Success
+import pureconfig._
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.StatusCodes.Forbidden
 import akka.http.scaladsl.model.StatusCodes.TooManyRequests
@@ -29,7 +30,7 @@ import whisk.core.entitlement.Privilege.ACTIVATE
 import whisk.core.entitlement.Privilege.REJECT
 import whisk.common.{Logging, TransactionId, UserEvents}
 import whisk.connector.kafka.KafkaMessagingProvider
-import whisk.core.WhiskConfig
+import whisk.core.{ConfigKeys, WhiskConfig}
 import whisk.core.connector.{EventMessage, Metric}
 import whisk.core.controller.RejectRequest
 import whisk.core.entity._
@@ -41,6 +42,16 @@ import whisk.http.Messages._
 package object types {
   type Entitlements = TrieMap[(Subject, String), Set[Privilege]]
 }
+
+
+/**
+  * Misc options related to runtime entitlements
+  * @param whitelists map of whitelisted namespaces for creation of specific action kinds
+  */
+protected[core] case class EntitlementConfig(whitelists: Option[Map[String, Set[String]]] = None)
+
+/** Container class for Resource-specific data used to determine entitlement */
+case class ResourceData(exec: Exec)
 
 /**
  * Resource is a type that encapsulates details relevant to identify a specific resource.
@@ -122,6 +133,8 @@ protected[core] abstract class EntitlementProvider(
     }
   }
 
+  protected val entitlementConfig: EntitlementConfig = loadConfigOrThrow[EntitlementConfig](ConfigKeys.runtimes)
+
   private val invokeRateThrottler =
     new RateThrottler(
       "actions per minute",
@@ -144,6 +157,8 @@ protected[core] abstract class EntitlementProvider(
       config.actionInvokeSystemOverloadLimit.toInt)
 
   private val eventProducer = KafkaMessagingProvider.getProducer(this.config)
+
+  private val namespaceWhitelists = entitlementConfig.whitelists.getOrElse(Map())
 
   /**
    * Grants a subject the right to access a resources.
@@ -208,8 +223,8 @@ protected[core] abstract class EntitlementProvider(
    * @param resource the resource the subject requests access to
    * @return a promise that completes with success iff the subject is permitted to access the requested resource
    */
-  protected[core] def check(user: Identity, right: Privilege, resource: Resource)(
-    implicit transid: TransactionId): Future[Unit] = check(user, right, Set(resource))
+  protected[core] def checkResource(user: Identity, right: Privilege, resource: Resource, resourceData: Option[ResourceData]
+    = None)(implicit transid: TransactionId): Future[Unit] = checkResources(user, right, Map(resource -> resourceData))
 
   /**
    * Constructs a RejectRequest containing the forbidden resources.
@@ -238,8 +253,8 @@ protected[core] abstract class EntitlementProvider(
    * @param noThrottle ignore throttle limits
    * @return a promise that completes with success iff the subject is permitted to access all of the requested resources
    */
-  protected[core] def check(user: Identity, right: Privilege, resources: Set[Resource], noThrottle: Boolean = false)(
-    implicit transid: TransactionId): Future[Unit] = {
+  protected[core] def checkResources(user: Identity, right: Privilege, resources: Map[Resource,Option[ResourceData]],
+    noThrottle: Boolean = false)(implicit transid: TransactionId): Future[Unit] = {
     val subject = user.subject
 
     val entitlementCheck: Future[Unit] = if (user.rights.contains(right)) {
@@ -249,8 +264,8 @@ protected[core] abstract class EntitlementProvider(
           if (noThrottle) Future.successful(())
           else
             checkSystemOverload(right)
-              .flatMap(_ => checkUserThrottle(user, right, resources))
-              .flatMap(_ => checkConcurrentUserThrottle(user, right, resources))
+              .flatMap(_ => checkUserThrottle(user, right, resources.keySet))
+              .flatMap(_ => checkConcurrentUserThrottle(user, right, resources.keySet))
         throttleCheck
           .flatMap(_ => checkPrivilege(user, right, resources))
           .flatMap(checkedResources => {
@@ -263,9 +278,9 @@ protected[core] abstract class EntitlementProvider(
       logging.debug(
         this,
         s"supplied authkey for user '$subject' does not have privilege '$right' for '${resources.mkString(", ")}'")
-      Future.failed(unauthorizedOn(resources))
+      Future.failed(unauthorizedOn(resources.keySet))
     } else {
-      Future.failed(unauthorizedOn(resources))
+      Future.failed(unauthorizedOn(resources.keySet))
     }
 
     entitlementCheck andThen {
@@ -278,22 +293,39 @@ protected[core] abstract class EntitlementProvider(
     }
   }
 
+
+  /** If a whitelist exists for a given kind, verify the current namespace is present */
+  def actionKindAllowedInNamespace(kind: String, namespace: String): Boolean = {
+    // remove `:` from incoming kind for comparison, due to env var limitations
+    val strippedKind = kind.filter(!":".contains(_))
+    if (namespaceWhitelists.contains(strippedKind))
+      namespaceWhitelists(strippedKind).contains(namespace)
+    else
+      true
+  }
+
   /**
    * NOTE: explicit grants do not work with package bindings because this method does not allow
    * for a continuation to check that both the binding and the references package are both either
    * implicitly or explicitly granted. Instead, the given resource set should include both the binding
    * and the referenced package.
    */
-  protected def checkPrivilege(user: Identity, right: Privilege, resources: Set[Resource])(
+  protected def checkPrivilege(user: Identity, right: Privilege, resources: Map[Resource,Option[ResourceData]])(
     implicit transid: TransactionId): Future[Set[(Resource, Boolean)]] = {
     // check the default namespace first, bypassing additional checks if permitted
     val defaultNamespaces = Set(user.namespace.asString)
     implicit val es: EntitlementProvider = this
 
     Future.sequence {
-      resources.map { resource =>
+      resources.keySet.map { resource =>
         resource.collection.implicitRights(user, defaultNamespaces, right, resource) flatMap {
-          case true => Future.successful(resource -> true)
+          case true =>
+            val allowed = resources(resource) match {
+              case Some(d) =>
+                actionKindAllowedInNamespace(d.exec.kind, resource.namespace.asString)
+              case None => true
+            }
+            Future.successful(resource -> allowed)
           case false =>
             logging.debug(this, "checking explicit grants")
             entitled(user.subject, right, resource).flatMap(b => Future.successful(resource -> b))
@@ -403,6 +435,10 @@ protected[core] abstract class EntitlementProvider(
  * Current entities that refer to others: action sequences, rules, and package bindings.
  */
 trait ReferencedEntities {
+
+  def referencedEntitiesMap(reference: Any): Map[Resource,Option[ResourceData]] = {
+    referencedEntities(reference).map(ref => ref -> None).toMap
+  }
 
   /**
    * Gathers referenced resources for types knows to refer to others.

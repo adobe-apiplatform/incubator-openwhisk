@@ -1,3 +1,6 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more contributor
+# license agreements; and to You under the Apache License, Version 2.0.
+
 mode: deploy
 prompt_user: true
 openwhisk_home: "{{ lookup('env', 'OPENWHISK_HOME') | default(playbook_dir ~ '/..', true) }}"
@@ -19,7 +22,7 @@ exclude_logs_from: []
 #   whisk_api_localhost_name_default (last)
 whisk_api_localhost_name_default: "localhost"
 
-hosts_dir: "{{ inventory_dir| default(env_hosts_dir) }}"
+hosts_dir: "{{ inventory_dir | default(env_hosts_dir) }}"
 
 whisk:
   version:
