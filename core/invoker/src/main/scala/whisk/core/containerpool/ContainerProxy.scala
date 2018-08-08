@@ -52,21 +52,26 @@ case object Paused extends ContainerState
 case object Removing extends ContainerState
 
 // Data
-sealed abstract class ContainerData(val lastUsed: Instant, val memoryLimit: ByteSize)
+sealed abstract class ContainerData(val lastUsed: Instant,
+                                    val memoryLimit: ByteSize,
+                                    val activeActivationCount: Int = 0)
 case class NoData() extends ContainerData(Instant.EPOCH, 0.B)
 case class MemoryData(override val memoryLimit: ByteSize) extends ContainerData(Instant.EPOCH, memoryLimit)
-case class PreWarmedData(container: Container, kind: String, override val memoryLimit: ByteSize)
-    extends ContainerData(Instant.EPOCH, memoryLimit)
+case class PreWarmedData(container: Container,
+                         kind: String,
+                         override val memoryLimit: ByteSize,
+                         override val activeActivationCount: Int = 0)
+    extends ContainerData(Instant.EPOCH, memoryLimit, activeActivationCount)
 case class WarmedData(container: Container,
                       invocationNamespace: EntityName,
                       action: ExecutableWhiskAction,
                       override val lastUsed: Instant,
-                      activeActivationCount: Int = 0)
+                      override val activeActivationCount: Int = 0)
     extends ContainerData(lastUsed, action.limits.memory.megabytes.MB) {
   def incrementActive: WarmedData =
-    copy(lastUsed = Instant.now, activeActivationCount = activeActivationCount + 1)
+    WarmedData(container, invocationNamespace, action, Instant.now, activeActivationCount + 1)
   def decrementActive: WarmedData =
-    copy(lastUsed = Instant.now, activeActivationCount = activeActivationCount - 1)
+    WarmedData(container, invocationNamespace, action, Instant.now, activeActivationCount - 1)
 }
 
 // Events received by the actor
@@ -153,7 +158,7 @@ class ContainerProxy(
           case Success(container) =>
             // the container is ready to accept an activation; register it as PreWarmed; this
             // normalizes the life cycle for containers and their cleanup when activations fail
-            self ! PreWarmedData(container, job.action.exec.kind, job.action.limits.memory.megabytes.MB)
+            self ! PreWarmedData(container, job.action.exec.kind, job.action.limits.memory.megabytes.MB, 1)
 
           case Failure(t) =>
             // the container did not come up cleanly, so disambiguate the failure mode and then cleanup
@@ -208,7 +213,7 @@ class ContainerProxy(
       initializeAndRun(data.container, job)
         .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
         .pipeTo(self)
-      goto(Running) using PreWarmedData(data.container, data.kind, data.memoryLimit)
+      goto(Running) using PreWarmedData(data.container, data.kind, data.memoryLimit, 1)
 
     case Event(Remove, data: PreWarmedData) => destroyContainer(data.container)
   }
@@ -233,12 +238,11 @@ class ContainerProxy(
       if (newData.activeActivationCount > 0) {
         stay using newData
       } else {
-        logging.info(this, "going to ready after load completed")
         goto(Ready) using newData
       }
 
     case Event(job: Run, data: WarmedData)
-        if data.activeActivationCount < poolConfig.maxConcurrent && !rescheduleJob => //if there was a delay, or a failure on resume, skip the run
+        if stateData.activeActivationCount < data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if there was a delay, or a failure on resume, skip the run
 
       implicit val transid = job.msg.transid
       val newData = data.incrementActive
@@ -386,7 +390,9 @@ class ContainerProxy(
       case data: WarmedData =>
         Future.successful(None)
       case _ =>
-        container.initialize(job.action.containerInitializer, actionTimeout).map(Some(_))
+        container
+          .initialize(job.action.containerInitializer, actionTimeout, job.action.limits.concurrency.maxConcurrent)
+          .map(Some(_))
     }
 
     val activation: Future[WhiskActivation] = initialize
@@ -395,7 +401,7 @@ class ContainerProxy(
         if (!initInterval.isEmpty) {
           self ! WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now, 1)
         }
-        val parameters = job.msg.content getOrElse JsObject.empty
+        val parameters = job.msg.content getOrElse JsObject()
 
         val authEnvironment = job.msg.user.authkey.toEnvironment
 
@@ -408,7 +414,7 @@ class ContainerProxy(
           "deadline" -> (Instant.now.toEpochMilli + actionTimeout.toMillis).toString.toJson)
 
         container
-          .run(parameters, JsObject(authEnvironment.fields ++ environment.fields), actionTimeout)(job.msg.transid)
+          .run(parameters, environment, actionTimeout, job.action.limits.concurrency.maxConcurrent)(job.msg.transid)
           .map {
             case (runInterval, response) =>
               val initRunInterval = initInterval

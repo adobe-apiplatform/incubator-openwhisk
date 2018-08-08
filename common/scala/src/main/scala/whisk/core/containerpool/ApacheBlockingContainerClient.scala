@@ -31,10 +31,8 @@ import org.apache.http.impl.NoConnectionReuseStrategy
 import org.apache.http.impl.client.HttpClientBuilder
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager
 import org.apache.http.util.EntityUtils
-import pureconfig._
 import spray.json._
 import whisk.common.{Logging, TransactionId}
-import whisk.core.ConfigKeys
 import whisk.core.entity.ActivationResponse._
 import whisk.core.entity.ByteSize
 import whisk.core.entity.size.SizeLong
@@ -202,9 +200,6 @@ protected class ApacheBlockingContainerClient(hostname: String,
 }
 
 object ApacheBlockingContainerClient {
-  //load ContainerPoolConfig here so that we can tune the connection manager based on concurrency requirements
-  private val poolConfig: ContainerPoolConfig = loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool)
-  private val maxConcurrent = poolConfig.maxConcurrent
 
   /** A helper method to post one single request to a connection. Used for container tests. */
   def post(host: String, port: Int, endPoint: String, content: JsValue)(

@@ -41,6 +41,8 @@ import whisk.core.database.UserContext
 
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.util.Try
+//import scala.util.Try
 
 @RunWith(classOf[JUnitRunner])
 class ContainerProxyTests
@@ -66,6 +68,11 @@ class ContainerProxyTests
 
   val invocationNamespace = EntityName("invocationSpace")
   val action = ExecutableWhiskAction(EntityPath("actionSpace"), EntityName("actionName"), exec)
+  val concurrentAction = ExecutableWhiskAction(
+    EntityPath("actionSpace"),
+    EntityName("actionName"),
+    exec,
+    limits = ActionLimits(concurrency = ConcurrencyLimit(20)))
 
   // create a transaction id to set the start time and control queue time
   val messageTransId = TransactionId(TransactionId.testing.meta.id)
@@ -130,14 +137,14 @@ class ContainerProxyTests
 
   /** Expect a NeedWork message with prewarmed data */
   def expectPreWarmed(kind: String) = expectMsgPF() {
-    case NeedWork(PreWarmedData(_, kind, memoryLimit)) => true
+    case NeedWork(PreWarmedData(_, kind, memoryLimit, _)) => true
   }
 
   /** Expect a NeedWork message with warmed data */
   def expectWarmed(namespace: String, action: ExecutableWhiskAction, count: Int) = {
     val test = EntityName(namespace)
     expectMsgPF() {
-      case NeedWork(WarmedData(_, `test`, `action`, _, activeActivationCount)) if activeActivationCount == count => true
+      case a @ NeedWork(WarmedData(_, `test`, `action`, _, _)) if a.data.activeActivationCount == count => true
     }
   }
 
@@ -442,7 +449,7 @@ class ContainerProxyTests
       Promise[(Interval, ActivationResponse)]())
     val container = new TestContainer(Some(initPromise), runPromises)
     val factory = createFactory(Future.successful(container))
-    val acker = createAcker()
+    val acker = createAcker(concurrentAction)
     val store = createStore
     val collector = createCollector()
 
@@ -453,8 +460,8 @@ class ContainerProxyTests
     registerCallback(machine)
     preWarm(machine) //ends in Started state
 
-    machine ! Run(action, message) //first in Started state
-    machine ! Run(action, message) //second in Started or Running state
+    machine ! Run(concurrentAction, message) //first in Started state
+    machine ! Run(concurrentAction, message) //second in Started or Running state
 
     //first message go from Started -> Running -> Ready, with 2 NeedWork messages (1 for init, 1 for run)
     //second message will be delayed until we get to Running state with WarmedData
@@ -462,35 +469,35 @@ class ContainerProxyTests
     expectMsg(Transition(machine, Started, Running))
 
     //complete the init
-    initPromise success (initInterval)
-    expectWarmed(invocationNamespace.name, action, 1) //when init completes
+    initPromise complete Try(initInterval)
+    expectWarmed(invocationNamespace.name, concurrentAction, 1) //when init completes
 
     //complete the first run
-    runPromises(0) success (runInterval, ActivationResponse.success())
-    expectWarmed(invocationNamespace.name, action, 0) //when first completes (count is 0 since stashed not counted)
+    runPromises(0) complete Try(runInterval, ActivationResponse.success())
+    expectWarmed(invocationNamespace.name, concurrentAction, 0) //when first completes (count is 0 since stashed not counted)
     expectMsg(Transition(machine, Running, Ready)) //wait for first to complete to skip the delay step that can only reliably be tested in single threaded
     expectMsg(Transition(machine, Ready, Running)) //when second starts (after delay...)
 
     //complete the second run
-    runPromises(1) success (runInterval, ActivationResponse.success())
-    expectWarmed(invocationNamespace.name, action, 0) //when second completes
+    runPromises(1) complete Try(runInterval, ActivationResponse.success())
+    expectWarmed(invocationNamespace.name, concurrentAction, 0) //when second completes
 
     //go back to ready after first and second runs are complete
     expectMsg(Transition(machine, Running, Ready))
 
-    machine ! Run(action, message) //third in Ready state
-    machine ! Run(action, message) //fourth in Ready state
+    machine ! Run(concurrentAction, message) //third in Ready state
+    machine ! Run(concurrentAction, message) //fourth in Ready state
 
     //third message will go from Ready -> Running -> Ready (after fourth run)
     expectMsg(Transition(machine, Ready, Running))
 
     //complete the third run
-    runPromises(2) success (runInterval, ActivationResponse.success())
-    expectWarmed(invocationNamespace.name, action, 1) //when third completes (stays in running)
+    runPromises(2) complete Try(runInterval, ActivationResponse.success())
+    expectWarmed(invocationNamespace.name, concurrentAction, 1) //when third completes (stays in running)
 
     //complete the fourth run
-    runPromises(3) success (runInterval, ActivationResponse.success())
-    expectWarmed(invocationNamespace.name, action, 0) //when fourth completes
+    runPromises(3) complete Try(runInterval, ActivationResponse.success())
+    expectWarmed(invocationNamespace.name, concurrentAction, 0) //when fourth completes
 
     //back to ready
     expectMsg(Transition(machine, Running, Ready))
@@ -638,7 +645,8 @@ class ContainerProxyTests
   it should "complete the transaction and destroy the container on a failed init" in within(timeout) {
     val container = new TestContainer {
       override def initialize(initializer: JsObject,
-                              timeout: FiniteDuration)(implicit transid: TransactionId): Future[Interval] = {
+                              timeout: FiniteDuration,
+                              concurrent: Int)(implicit transid: TransactionId): Future[Interval] = {
         initializeCount += 1
         Future.failed(InitializationError(initInterval, ActivationResponse.developerError("boom")))
       }
@@ -685,7 +693,7 @@ class ContainerProxyTests
   it should "complete the transaction and destroy the container on a failed run IFF failure was containerError" in within(
     timeout) {
     val container = new TestContainer {
-      override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration)(
+      override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
         implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         runCount += 1
         Future.successful((initInterval, ActivationResponse.developerError(("boom"))))
@@ -892,7 +900,8 @@ class ContainerProxyTests
     val initPromise = Promise[Interval]
     val container = new TestContainer {
       override def initialize(initializer: JsObject,
-                              timeout: FiniteDuration)(implicit transid: TransactionId): Future[Interval] = {
+                              timeout: FiniteDuration,
+                              concurrent: Int)(implicit transid: TransactionId): Future[Interval] = {
         initializeCount += 1
         initPromise.future
       }
@@ -1032,7 +1041,7 @@ class ContainerProxyTests
       destroyCount += 1
       super.destroy()
     }
-    override def initialize(initializer: JsObject, timeout: FiniteDuration)(
+    override def initialize(initializer: JsObject, timeout: FiniteDuration, concurrent: Int)(
       implicit transid: TransactionId): Future[Interval] = {
       initializeCount += 1
       initializer shouldBe action.containerInitializer
@@ -1040,7 +1049,7 @@ class ContainerProxyTests
 
       initPromise.map(_.future).getOrElse(Future.successful(initInterval))
     }
-    override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration)(
+    override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
       implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
       runCount += 1
       environment.fields("namespace") shouldBe invocationNamespace.name.toJson

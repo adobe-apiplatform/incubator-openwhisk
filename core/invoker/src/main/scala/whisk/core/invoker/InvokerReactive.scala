@@ -47,7 +47,8 @@ class InvokerReactive(
   config: WhiskConfig,
   instance: InvokerInstanceId,
   producer: MessageProducer,
-  poolConfig: ContainerPoolConfig = loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool))(
+  poolConfig: ContainerPoolConfig = loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool),
+  limitsConfig: ConcurrencyLimitConfig = loadConfigOrThrow[ConcurrencyLimitConfig](ConfigKeys.concurrencyLimit))(
   implicit actorSystem: ActorSystem,
   logging: Logging) {
 
@@ -106,7 +107,7 @@ class InvokerReactive(
 
   //number of peeked messages - increasing the concurrentScheduleFactor improves concurrent usage, but adds risk for message loss in case of crash
   private val maxPeek =
-    math.max(maximumContainers, (maximumContainers * poolConfig.maxConcurrent * poolConfig.concurrentPeekFactor).toInt)
+    math.max(maximumContainers, (maximumContainers * limitsConfig.max * poolConfig.concurrentPeekFactor).toInt)
 
   private val consumer =
     msgProvider.getConsumer(config, topic, topic, maxPeek, maxPollInterval = TimeLimit.MAX_DURATION + 1.minute)
