@@ -414,7 +414,11 @@ class ContainerProxy(
           "deadline" -> (Instant.now.toEpochMilli + actionTimeout.toMillis).toString.toJson)
 
         container
-          .run(parameters, environment, actionTimeout, job.action.limits.concurrency.maxConcurrent)(job.msg.transid)
+          .run(
+            parameters,
+            JsObject(authEnvironment.fields ++ environment.fields),
+            actionTimeout,
+            job.action.limits.concurrency.maxConcurrent)(job.msg.transid)
           .map {
             case (runInterval, response) =>
               val initRunInterval = initInterval
