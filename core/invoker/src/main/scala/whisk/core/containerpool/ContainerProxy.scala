@@ -60,8 +60,14 @@ case class PreWarmedData(container: Container, kind: String, override val memory
 case class WarmedData(container: Container,
                       invocationNamespace: EntityName,
                       action: ExecutableWhiskAction,
-                      override val lastUsed: Instant)
-    extends ContainerData(lastUsed, action.limits.memory.megabytes.MB)
+                      override val lastUsed: Instant,
+                      activeActivationCount: Int = 0)
+    extends ContainerData(lastUsed, action.limits.memory.megabytes.MB) {
+  def incrementActive: WarmedData =
+    copy(lastUsed = Instant.now, activeActivationCount = activeActivationCount + 1)
+  def decrementActive: WarmedData =
+    copy(lastUsed = Instant.now, activeActivationCount = activeActivationCount - 1)
+}
 
 // Events received by the actor
 case class Start(exec: CodeExec[_], memoryLimit: ByteSize)
@@ -202,8 +208,7 @@ class ContainerProxy(
       initializeAndRun(data.container, job)
         .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
         .pipeTo(self)
-
-      goto(Running)
+      goto(Running) using PreWarmedData(data.container, data.kind, data.memoryLimit)
 
     case Event(Remove, data: PreWarmedData) => destroyContainer(data.container)
   }
@@ -213,10 +218,35 @@ class ContainerProxy(
     // and we keep it in case we need to destroy it.
     case Event(data: PreWarmedData, _) => stay using data
 
-    // Run was successful
-    case Event(data: WarmedData, _) =>
+    // Init was successful
+    case Event(data: WarmedData, _: PreWarmedData) =>
+      //in case concurrency supported, multiple runs can begin as soon as init is complete
       context.parent ! NeedWork(data)
-      goto(Ready) using data
+      stay using data
+
+    // Run was successful
+    case Event(_: WarmedData, s: WarmedData) =>
+      val newData = s.decrementActive
+
+      context.parent ! NeedWork(newData)
+
+      if (newData.activeActivationCount > 0) {
+        stay using newData
+      } else {
+        logging.info(this, "going to ready after load completed")
+        goto(Ready) using newData
+      }
+
+    case Event(job: Run, data: WarmedData)
+        if data.activeActivationCount < poolConfig.maxConcurrent && !rescheduleJob => //if there was a delay, or a failure on resume, skip the run
+
+      implicit val transid = job.msg.transid
+      val newData = data.incrementActive
+
+      initializeAndRun(data.container, job)
+        .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
+        .pipeTo(self)
+      stay() using newData
 
     // Failed after /init (the first run failed)
     case Event(_: FailureMessage, data: PreWarmedData) => destroyContainer(data.container)
@@ -235,11 +265,13 @@ class ContainerProxy(
   when(Ready, stateTimeout = pauseGrace) {
     case Event(job: Run, data: WarmedData) =>
       implicit val transid = job.msg.transid
+      val newData = data.incrementActive
+
       initializeAndRun(data.container, job)
         .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
         .pipeTo(self)
 
-      goto(Running)
+      goto(Running) using newData
 
     // pause grace timed out
     case Event(StateTimeout, data: WarmedData) =>
@@ -258,6 +290,8 @@ class ContainerProxy(
   when(Paused, stateTimeout = unusedTimeout) {
     case Event(job: Run, data: WarmedData) =>
       implicit val transid = job.msg.transid
+      val newData = data.incrementActive
+
       data.container
         .resume()
         .andThen {
@@ -272,7 +306,7 @@ class ContainerProxy(
         .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
         .pipeTo(self)
 
-      goto(Running)
+      goto(Running) using newData
 
     // container is reclaimed by the pool or it has become too old
     case Event(StateTimeout | Remove, data: WarmedData) =>
@@ -349,12 +383,18 @@ class ContainerProxy(
 
     // Only initialize iff we haven't yet warmed the container
     val initialize = stateData match {
-      case data: WarmedData => Future.successful(None)
-      case _                => container.initialize(job.action.containerInitializer, actionTimeout).map(Some(_))
+      case data: WarmedData =>
+        Future.successful(None)
+      case _ =>
+        container.initialize(job.action.containerInitializer, actionTimeout).map(Some(_))
     }
 
     val activation: Future[WhiskActivation] = initialize
       .flatMap { initInterval =>
+        //immediately setup warmedData for use (before first execution) so that concurrent actions can use it asap
+        if (!initInterval.isEmpty) {
+          self ! WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now, 1)
+        }
         val parameters = job.msg.content getOrElse JsObject.empty
 
         val authEnvironment = job.msg.user.authkey.toEnvironment

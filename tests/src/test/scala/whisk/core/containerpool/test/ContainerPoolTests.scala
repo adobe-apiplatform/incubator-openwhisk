@@ -494,8 +494,9 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
   /** Helper to create WarmedData with sensible defaults */
   def warmedData(action: ExecutableWhiskAction = createAction(),
                  namespace: String = standardNamespace.asString,
-                 lastUsed: Instant = Instant.now) =
-    WarmedData(stub[Container], EntityName(namespace), action, lastUsed)
+                 lastUsed: Instant = Instant.now,
+                 active: Int = 0) =
+    WarmedData(stub[Container], EntityName(namespace), action, lastUsed, active)
 
   /** Helper to create PreWarmedData with sensible defaults */
   def preWarmedData(kind: String = "anyKind") = PreWarmedData(stub[Container], kind, 256.MB)
@@ -569,6 +570,16 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     ContainerPool.schedule(differentAction, data.invocationNamespace, pool) shouldBe None
   }
 
+  it should "not use a container when active activation count >= maxconcurrent" in {
+    val maxConcurrent = 25
+    val data = warmedData(active = maxConcurrent)
+    val pool = Map('warm -> data)
+    ContainerPool.schedule(data.action, data.invocationNamespace, pool, maxConcurrent) shouldBe None
+
+    ContainerPool.schedule(data.action, data.invocationNamespace, pool, maxConcurrent + 1) shouldBe Some('warm, data)
+
+  }
+
   behavior of "ContainerPool remove()"
 
   it should "not provide a container if pool is empty" in {
@@ -613,5 +624,17 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val pool = Map('first -> first, 'second -> second, 'third -> third, 'oldest -> oldest)
 
     ContainerPool.remove(pool, MemoryLimit.stdMemory * 2) shouldBe List('oldest, 'first)
+  }
+
+  it should "provide oldest container (excluding concurrently busy) from busy pool with multiple containers" in {
+    val commonNamespace = differentNamespace.asString
+    val first = warmedData(namespace = commonNamespace, lastUsed = Instant.ofEpochMilli(1), active = 0)
+    val second = warmedData(namespace = commonNamespace, lastUsed = Instant.ofEpochMilli(2), active = 0)
+    val oldest = warmedData(namespace = commonNamespace, lastUsed = Instant.ofEpochMilli(0), active = 3)
+
+    var pool = Map('first -> first, 'second -> second, 'oldest -> oldest)
+    ContainerPool.remove(pool) shouldBe Some('first)
+    pool = pool - 'first
+    ContainerPool.remove(pool) shouldBe Some('second)
   }
 }
