@@ -1108,7 +1108,8 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
         ActionLimitsOption(
           Some(actionOldSchema.limits.timeout),
           Some(actionOldSchema.limits.memory),
-          Some(actionOldSchema.limits.logs))))
+          Some(actionOldSchema.limits.logs),
+          Some(actionOldSchema.limits.concurrency))))
     val expectedPutLog =
       Seq(s"uploading attachment '[\\w-/:]+' of document 'id: ${actionOldSchema.namespace}/${actionOldSchema.name}")
         .mkString("(?s).*")

@@ -641,8 +641,8 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val oldest = warmedData(namespace = commonNamespace, lastUsed = Instant.ofEpochMilli(0), active = 3)
 
     var pool = Map('first -> first, 'second -> second, 'oldest -> oldest)
-    ContainerPool.remove(pool) shouldBe Some('first)
+    ContainerPool.remove(pool, MemoryLimit.stdMemory) shouldBe Some('first)
     pool = pool - 'first
-    ContainerPool.remove(pool) shouldBe Some('second)
+    ContainerPool.remove(pool, MemoryLimit.stdMemory) shouldBe Some('second)
   }
 }
