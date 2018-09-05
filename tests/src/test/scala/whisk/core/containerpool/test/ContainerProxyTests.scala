@@ -532,7 +532,7 @@ class ContainerProxyTests
   it should "complete the transaction and reuse the container on a failed run IFF failure was applicationError" in within(
     timeout) {
     val container = new TestContainer {
-      override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration)(
+      override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
         implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         runCount += 1
         //every other run fails
