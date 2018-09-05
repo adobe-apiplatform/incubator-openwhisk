@@ -17,6 +17,8 @@
 
 package whisk.core.loadBalancer
 
+import akka.actor.ActorRef
+import akka.actor.ActorRefFactory
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.LongAdder
@@ -137,7 +139,18 @@ import scala.util.{Failure, Success}
  * - If a loadbalancer leaves or joins the cluster, all state is removed and created from scratch. Those events should
  *   not happen often.
  */
-class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: ControllerInstanceId)(
+class ShardingContainerPoolBalancer(
+  config: WhiskConfig,
+  controllerInstance: ControllerInstanceId,
+  private val feedFactory: (ActorRefFactory, MessagingProvider, (Array[Byte]) => Future[Unit]) => ActorRef,
+  private val invokerPoolFactory: (ActorRefFactory,
+                                   MessagingProvider,
+                                   MessageProducer,
+                                   (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
+                                   Option[ActorRef]) => ActorRef,
+  lbConfig: ShardingContainerPoolBalancerConfig =
+    loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer),
+  private val messagingProvider: MessagingProvider = SpiLoader.get[MessagingProvider])(
   implicit val actorSystem: ActorSystem,
   logging: Logging,
   materializer: ActorMaterializer)
@@ -156,16 +169,14 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
     None
   }
 
-  private val lbConfig = loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer)
-
   /** State related to invocations and throttling */
-  private val activations = TrieMap[ActivationId, ActivationEntry]()
+  protected[loadBalancer] val activations = TrieMap[ActivationId, ActivationEntry]()
   private val activationsPerNamespace = TrieMap[UUID, LongAdder]()
   private val totalActivations = new LongAdder()
   private val totalActivationMemory = new LongAdder()
 
   /** State needed for scheduling. */
-  private val schedulingState = ShardingContainerPoolBalancerState()(lbConfig)
+  protected[loadBalancer] val schedulingState = ShardingContainerPoolBalancerState()(lbConfig)
 
   actorSystem.scheduler.schedule(0.seconds, 10.seconds) {
     MetricEmitter.emitHistogramMetric(LOADBALANCER_ACTIVATIONS_INFLIGHT(controllerInstance), totalActivations.longValue)
@@ -221,6 +232,15 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
   override def totalActiveActivations: Future[Int] = Future.successful(totalActivations.intValue())
   override def clusterSize: Int = schedulingState.clusterSize
 
+  private def containerSlots(
+    action: ExecutableWhiskActionMetaData): Option[TrieMap[InvokerInstanceId, ResizableSemaphore]] = {
+    if (action.limits.concurrency.maxConcurrent == 1) {
+      None
+    } else {
+      Some(schedulingState.containerSlots.getOrElseUpdate(action.fullyQualifiedName(true), TrieMap.empty))
+    }
+  }
+
   /** 1. Publish a message to the loadbalancer */
   override def publish(action: ExecutableWhiskActionMetaData, msg: ActivationMessage)(
     implicit transid: TransactionId): Future[Future[Either[ActivationId, WhiskActivation]]] = {
@@ -232,12 +252,15 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
       val hash = ShardingContainerPoolBalancer.generateHash(msg.user.namespace.name, action.fullyQualifiedName(false))
       val homeInvoker = hash % invokersToUse.size
       val stepSize = stepSizes(hash % stepSizes.size)
-      ShardingContainerPoolBalancer.schedule(
+      val invoker = ShardingContainerPoolBalancer.schedule(
+        action.limits.concurrency.maxConcurrent,
         invokersToUse,
+        containerSlots(action),
         schedulingState.invokerSlots,
         action.limits.memory.megabytes,
         homeInvoker,
         stepSize)
+      invoker
     } else {
       None
     }
@@ -293,12 +316,13 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
           msg.user.namespace.uuid,
           instance,
           action.limits.memory.megabytes.MB,
+          action.limits.concurrency.maxConcurrent,
+          action.fullyQualifiedName(true),
           timeoutHandler,
           Promise[Either[ActivationId, WhiskActivation]]())
       })
   }
 
-  private val messagingProvider = SpiLoader.get[MessagingProvider]
   private val messageProducer = messagingProvider.getProducer(config, Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT))
 
   /** 3. Send the activation to the invoker */
@@ -331,24 +355,10 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
    * Subscribes to active acks (completion messages from the invokers), and
    * registers a handler for received active acks from invokers.
    */
-  private val activeAckTopic = s"completed${controllerInstance.asString}"
-  private val maxActiveAcksPerPoll = 128
-  private val activeAckPollDuration = 1.second
-  private val activeAckConsumer =
-    messagingProvider.getConsumer(config, activeAckTopic, activeAckTopic, maxPeek = maxActiveAcksPerPoll)
+  private val activationFeed = feedFactory(actorSystem, messagingProvider, processAcknowledgement)
 
-  private val activationFeed = actorSystem.actorOf(Props {
-    new MessageFeed(
-      "activeack",
-      logging,
-      activeAckConsumer,
-      maxActiveAcksPerPoll,
-      activeAckPollDuration,
-      processAcknowledgement)
-  })
-
-  /** 4. Get the acknowledgement message and parse it */
-  private def processAcknowledgement(bytes: Array[Byte]): Future[Unit] = Future {
+  /** 4. Get the active-ack message and parse it */
+  protected[loadBalancer] def processAcknowledgement(bytes: Array[Byte]): Future[Unit] = Future {
     val raw = new String(bytes, StandardCharsets.UTF_8)
     AcknowledegmentMessage.parse(raw) match {
       case Success(m: CompletionMessage) =>
@@ -388,11 +398,11 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
   }
 
   /** Process the completion ack and update the state */
-  private def processCompletion(aid: ActivationId,
-                                tid: TransactionId,
-                                forced: Boolean,
-                                isSystemError: Boolean,
-                                invoker: InvokerInstanceId): Unit = {
+  protected[loadBalancer] def processCompletion(aid: ActivationId,
+                                                tid: TransactionId,
+                                                forced: Boolean,
+                                                isSystemError: Boolean,
+                                                invoker: InvokerInstanceId): Unit = {
 
     val invocationResult = if (forced) {
       InvocationFinishedResult.Timeout
@@ -411,7 +421,16 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
         totalActivations.decrement()
         totalActivationMemory.add(entry.memory.toMB * (-1))
         activationsPerNamespace.get(entry.namespaceId).foreach(_.decrement())
-        schedulingState.invokerSlots.lift(invoker.toInt).foreach(_.release(entry.memory.toMB.toInt))
+        //for concurrent activations, release the concurrency slots, after 0 release the invoker slot
+        if (entry.maxConcurrent > 1) {
+          //println(s"getting m for ${invoker} ${schedulingState.containerSlots(entry.fullyQualifiedEntityName)}")
+          val m = schedulingState.containerSlots(entry.fullyQualifiedEntityName)(invoker)
+          if (m.release(1, true)) {
+            schedulingState.invokerSlots.lift(invoker.toInt).foreach(_.release(entry.memory.toMB.toInt))
+          }
+        } else {
+          schedulingState.invokerSlots.lift(invoker.toInt).foreach(_.release(entry.memory.toMB.toInt))
+        }
 
         if (!forced) {
           entry.timeoutHandler.cancel()
@@ -446,16 +465,20 @@ class ShardingContainerPoolBalancer(config: WhiskConfig, controllerInstance: Con
     }
   }
 
-  private val invokerPool = {
-    InvokerPool.prepare(controllerInstance, WhiskEntityStore.datastore())
-
-    actorSystem.actorOf(
-      InvokerPool.props(
-        (f, i) => f.actorOf(InvokerActor.props(i, controllerInstance)),
-        (m, i) => sendActivationToInvoker(messageProducer, m, i),
-        messagingProvider.getConsumer(config, s"health${controllerInstance.asString}", "health", maxPeek = 128),
-        Some(monitor)))
-  }
+//  private val invokerPool = {
+//
+//    println(s"invoker pool producer ${messageProducer}")
+//    InvokerPool.prepare(controllerInstance, WhiskEntityStore.datastore())
+//
+//    actorSystem.actorOf(
+//      InvokerPool.props(
+//        (f, i) => f.actorOf(InvokerActor.props(i, controllerInstance)),
+//        (m, i) => sendActivationToInvoker(messageProducer, m, i),
+//        messagingProvider.getConsumer(config, s"health${controllerInstance.asString}", "health", maxPeek = 128),
+//        Some(monitor)))
+//  }
+  private val invokerPool =
+    invokerPoolFactory(actorSystem, messagingProvider, messageProducer, sendActivationToInvoker, Some(monitor))
 }
 
 object ShardingContainerPoolBalancer extends LoadBalancerProvider {
@@ -463,7 +486,57 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
   override def instance(whiskConfig: WhiskConfig, instance: ControllerInstanceId)(
     implicit actorSystem: ActorSystem,
     logging: Logging,
-    materializer: ActorMaterializer): LoadBalancer = new ShardingContainerPoolBalancer(whiskConfig, instance)
+    materializer: ActorMaterializer): LoadBalancer = {
+
+//    private val activeAckTopic = s"completed${controllerInstance.asString}"
+//    private val maxActiveAcksPerPoll = 128
+//    private val activeAckPollDuration = 1.second
+//    private val activeAckConsumer =
+//    messagingProvider.getConsumer(config, activeAckTopic, activeAckTopic, maxPeek = maxActiveAcksPerPoll)
+//
+//    private val activationFeed = actorSystem.actorOf(Props {
+//      new MessageFeed(
+//        "activeack",
+//        logging,
+//        activeAckConsumer,
+//        maxActiveAcksPerPoll,
+//        activeAckPollDuration,
+//        processAcknowledgement)
+//    })
+
+    val activeAckTopic = s"completed${instance.asString}"
+    val maxActiveAcksPerPoll = 128
+    val activeAckPollDuration = 1.second
+
+    val feedFactory = (f: ActorRefFactory, provider: MessagingProvider, acker: (Array[Byte]) => Future[Unit]) =>
+      f.actorOf(Props {
+        new MessageFeed(
+          "activeack",
+          logging,
+          provider.getConsumer(whiskConfig, activeAckTopic, activeAckTopic, maxPeek = maxActiveAcksPerPoll),
+          maxActiveAcksPerPoll,
+          activeAckPollDuration,
+          acker)
+      })
+
+    val invokerPoolFactory = (f: ActorRefFactory,
+                              messagingProvider: MessagingProvider,
+                              messageProducer: MessageProducer,
+                              send: (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
+                              monitor: Option[ActorRef]) => {
+
+      InvokerPool.prepare(instance, WhiskEntityStore.datastore())
+
+      f.actorOf(
+        InvokerPool.props(
+          (f, i) => f.actorOf(InvokerActor.props(i, instance)),
+          (m, i) => send(messageProducer, m, i),
+          messagingProvider.getConsumer(whiskConfig, s"health${instance.asString}", "health", maxPeek = 128),
+          monitor))
+    }
+
+    new ShardingContainerPoolBalancer(whiskConfig, instance, feedFactory, invokerPoolFactory)
+  }
 
   def requiredProperties: Map[String, String] = kafkaHosts
 
@@ -488,7 +561,9 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
    * Scans through all invokers and searches for an invoker tries to get a free slot on an invoker. If no slot can be
    * obtained, randomly picks a healthy invoker.
    *
+   * @param maxConcurrent concurrency limit supported by this action
    * @param invokers a list of available invokers to search in, including their state
+   * @param concurrentSlots optional map of invoker -> semaphore to track concurrency slots for this action
    * @param dispatched semaphores for each invoker to give the slots away from
    * @param slots Number of slots, that need to be acquired (e.g. memory in MB)
    * @param index the index to start from (initially should be the "homeInvoker"
@@ -496,7 +571,9 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
    * @return an invoker to schedule to or None of no invoker is available
    */
   @tailrec
-  def schedule(invokers: IndexedSeq[InvokerHealth],
+  def schedule(maxConcurrent: Int,
+               invokers: IndexedSeq[InvokerHealth],
+               concurrentSlots: Option[TrieMap[InvokerInstanceId, ResizableSemaphore]],
                dispatched: IndexedSeq[ForcibleSemaphore],
                slots: Int,
                index: Int,
@@ -506,8 +583,16 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
 
     if (numInvokers > 0) {
       val invoker = invokers(index)
-      // If the current invoker is healthy and we can get a slot
-      if (invoker.status.isUsable && dispatched(invoker.id.toInt).tryAcquire(slots)) {
+      //test this invoker - if this action supports concurrency, use the scheduleConcurrent function
+      if (maxConcurrent > 1 && invoker.status.isUsable && scheduleConcurrent(
+            maxConcurrent,
+            slots,
+            invoker,
+            concurrentSlots,
+            dispatched)) {
+        Some(invoker.id)
+        // If the current invoker is healthy and we can get a slot
+      } else if (maxConcurrent == 1 && invoker.status.isUsable && dispatched(invoker.id.toInt).tryAcquire(slots)) {
         Some(invoker.id)
       } else {
         // If we've gone through all invokers
@@ -516,7 +601,12 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
           if (healthyInvokers.nonEmpty) {
             // Choose a healthy invoker randomly
             val random = healthyInvokers(ThreadLocalRandom.current().nextInt(healthyInvokers.size)).id
-            dispatched(random.toInt).forceAcquire(slots)
+            if (maxConcurrent > 1) {
+              acquireConcurrent(maxConcurrent, slots, random, concurrentSlots.get(random), dispatched, true)
+            } else {
+              dispatched(random.toInt).forceAcquire(slots)
+            }
+            //concurrentSlots.map(_(random.toInt).release(5))
             logging.warn(this, s"system is overloaded. Chose invoker${random.toInt} by random assignment.")
             Some(random)
           } else {
@@ -524,11 +614,56 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
           }
         } else {
           val newIndex = (index + step) % numInvokers
-          schedule(invokers, dispatched, slots, newIndex, step, stepsDone + 1)
+          schedule(maxConcurrent, invokers, concurrentSlots, dispatched, slots, newIndex, step, stepsDone + 1)
         }
       }
     } else {
       None
+    }
+  }
+  def scheduleConcurrent(maxConcurrent: Int,
+                         slots: Int,
+                         invoker: InvokerHealth,
+                         concurrentSlots: Option[TrieMap[InvokerInstanceId, ResizableSemaphore]],
+                         dispatched: IndexedSeq[ForcibleSemaphore]): Boolean = {
+
+    //new semaphore requires no synchronization
+    val oldConcurrentSlot = concurrentSlots.get
+      .putIfAbsent(invoker.id, new ResizableSemaphore(0, maxConcurrent))
+
+    val concurrentSlot = concurrentSlots.get(invoker.id)
+    //no previous container (implied by no concurrency semaphore), attempt allocation of memory slots
+    if (oldConcurrentSlot.isEmpty) {
+      acquireConcurrent(maxConcurrent, slots, invoker.id, concurrentSlot, dispatched)
+      //existing concurrency slots, attempt allocation of concurrency slot
+    } else if (concurrentSlot.tryAcquire(1)) {
+      //success - no additional change to memory or concurrency permits
+      true
+    } else {
+      //previous container exists, but no concurrency slots available, acquire new container
+      acquireConcurrent(maxConcurrent, slots, invoker.id, concurrentSlot, dispatched)
+    }
+  }
+  def acquireConcurrent(maxConcurrent: Int,
+                        slots: Int,
+                        invoker: InvokerInstanceId,
+                        concurrentSlot: ResizableSemaphore,
+                        dispatched: IndexedSeq[ForcibleSemaphore],
+                        force: Boolean = false): Boolean = {
+    //in sync - retry concurrency allocation, else try memory (new container) allocation
+    concurrentSlot.synchronized {
+      if (concurrentSlot.tryAcquire(1)) {
+        true
+      } else if (force) {
+        dispatched(invoker.toInt).forceAcquire(slots)
+        concurrentSlot.release(maxConcurrent - 1, false)
+        true
+      } else if (dispatched(invoker.toInt).tryAcquire(slots)) {
+        concurrentSlot.release(maxConcurrent - 1, false)
+        true
+      } else {
+        false
+      }
     }
   }
 }
@@ -549,7 +684,10 @@ case class ShardingContainerPoolBalancerState(
   private var _blackboxInvokers: IndexedSeq[InvokerHealth] = IndexedSeq.empty[InvokerHealth],
   private var _managedStepSizes: Seq[Int] = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(0),
   private var _blackboxStepSizes: Seq[Int] = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(0),
-  private var _invokerSlots: IndexedSeq[ForcibleSemaphore] = IndexedSeq.empty[ForcibleSemaphore],
+  protected[loadBalancer] var _invokerSlots: IndexedSeq[ForcibleSemaphore] = IndexedSeq.empty[ForcibleSemaphore],
+  protected[loadBalancer] var _containerSlots: TrieMap[FullyQualifiedEntityName,
+                                                       TrieMap[InvokerInstanceId, ResizableSemaphore]] =
+    TrieMap.empty[FullyQualifiedEntityName, TrieMap[InvokerInstanceId, ResizableSemaphore]],
   private var _clusterSize: Int = 1)(
   lbConfig: ShardingContainerPoolBalancerConfig =
     loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer))(implicit logging: Logging) {
@@ -564,6 +702,8 @@ case class ShardingContainerPoolBalancerState(
   def managedStepSizes: Seq[Int] = _managedStepSizes
   def blackboxStepSizes: Seq[Int] = _blackboxStepSizes
   def invokerSlots: IndexedSeq[ForcibleSemaphore] = _invokerSlots
+  def containerSlots: TrieMap[FullyQualifiedEntityName, TrieMap[InvokerInstanceId, ResizableSemaphore]] =
+    _containerSlots
   def clusterSize: Int = _clusterSize
 
   /**
@@ -673,5 +813,7 @@ case class ActivationEntry(id: ActivationId,
                            namespaceId: UUID,
                            invokerName: InvokerInstanceId,
                            memory: ByteSize,
+                           maxConcurrent: Int,
+                           fullyQualifiedEntityName: FullyQualifiedEntityName,
                            timeoutHandler: Cancellable,
                            promise: Promise[Either[ActivationId, WhiskActivation]])
