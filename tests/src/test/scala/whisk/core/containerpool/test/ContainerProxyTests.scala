@@ -145,7 +145,7 @@ class ContainerProxyTests
   def expectWarmed(namespace: String, action: ExecutableWhiskAction, count: Int) = {
     val test = EntityName(namespace)
     expectMsgPF() {
-      case a @ NeedWork(WarmedData(_, `test`, `action`, _, _)) if a.data.activeActivationCount == count => true
+      case a @ NeedWork(WarmedData(_, `test`, `action`, _, _)) if a.data.activeActivationCount == count => //matched, otherwise will fail
     }
   }
 
@@ -567,7 +567,7 @@ class ContainerProxyTests
 
     // Note that there are no intermediate state changes
     //second one will succeed
-    run(machine, Ready)
+    run(machine, Ready, false)
 
     //With exception of the error on first run, the assertions should be the same as in
     //         `run an action and continue with a next run without pausing the container`
