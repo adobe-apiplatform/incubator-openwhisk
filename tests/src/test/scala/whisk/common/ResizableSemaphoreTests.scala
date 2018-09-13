@@ -69,7 +69,8 @@ class ResizableSemaphoreTests extends FlatSpec with Matchers {
     s.tryAcquire() shouldBe false
     s.release(5) shouldBe true // 0 permits left (5 permits reduced to 0)
     s.tryAcquire() shouldBe false
-    s.release(5) shouldBe false // 5 permits left
+    s.release(6) shouldBe false // 5 permits left
+    s.tryAcquire() shouldBe true // 5 permits left
     s.tryAcquire() shouldBe true // 4 permits left
     s.tryAcquire() shouldBe true // 3 permits left
     s.tryAcquire() shouldBe true // 2 permits left
