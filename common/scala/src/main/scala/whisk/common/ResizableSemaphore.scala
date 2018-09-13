@@ -35,10 +35,10 @@ class ResizableSemaphore(maxAllowed: Int, reductionSize: Int) {
 
     /** Try to release a permit and return whether or not that operation was successful. */
     @tailrec
-    final def tryReleaseSharedWithResult(releases: Int, reducing: Boolean): Boolean = {
+    final def tryReleaseSharedWithResult(releases: Int): Boolean = {
       val current = getState
       val next2 = current + releases
-      val (next, reduced) = if (reducing && (next2 % reductionSize == 0)) {
+      val (next, reduced) = if (next2 % reductionSize == 0) {
         (next2 - reductionSize, true)
       } else {
         (next2, false)
@@ -47,7 +47,7 @@ class ResizableSemaphore(maxAllowed: Int, reductionSize: Int) {
       if (compareAndSetState(current, next)) {
         reduced
       } else {
-        tryReleaseSharedWithResult(releases, reducing)
+        tryReleaseSharedWithResult(releases)
       }
     }
 
@@ -89,9 +89,9 @@ class ResizableSemaphore(maxAllowed: Int, reductionSize: Int) {
    *
    * @param acquires the number of permits to release
    */
-  def release(acquires: Int = 1, reducing: Boolean = false): Boolean = {
+  def release(acquires: Int = 1): Boolean = {
     require(acquires > 0, "cannot release negative or no permits")
-    sync.tryReleaseSharedWithResult(acquires, reducing)
+    sync.tryReleaseSharedWithResult(acquires)
   }
 
   /** Returns the number of currently available permits. Possibly negative. */

@@ -59,24 +59,24 @@ class ResizableSemaphoreTests extends FlatSpec with Matchers {
     s.tryAcquire(2) shouldBe true
   }
 
-  it should "allow to resize permits - when factor of reductionSize is reached during release with reducing=true" in {
+  it should "allow to resize permits when factor of reductionSize is reached during release" in {
     val s = new ResizableSemaphore(2, 5)
     s.tryAcquire() shouldBe true // 1 permit left
     s.tryAcquire() shouldBe true // 0 permits left
     s.tryAcquire() shouldBe false
-    s.release(4, reducing = true) shouldBe false // 4 permits left
+    s.release(4) shouldBe false // 4 permits left
     s.tryAcquire(4) shouldBe true
     s.tryAcquire() shouldBe false
-    s.release(5, reducing = true) shouldBe true // 0 permits left (5 permits reduced to 0)
+    s.release(5) shouldBe true // 0 permits left (5 permits reduced to 0)
     s.tryAcquire() shouldBe false
-    s.release(5, reducing = false) shouldBe false // 5 permits left
+    s.release(5) shouldBe false // 5 permits left
     s.tryAcquire() shouldBe true // 4 permits left
     s.tryAcquire() shouldBe true // 3 permits left
     s.tryAcquire() shouldBe true // 2 permits left
     s.tryAcquire() shouldBe true // 1 permits left
     s.tryAcquire() shouldBe true // 0 permits left
     s.tryAcquire() shouldBe false
-    s.release(10, reducing = true) shouldBe true // 5 permits left (10 permits reduced to 5)
+    s.release(10) shouldBe true // 5 permits left (10 permits reduced to 5)
     s.tryAcquire() shouldBe true
     s.availablePermits shouldBe 4
   }
