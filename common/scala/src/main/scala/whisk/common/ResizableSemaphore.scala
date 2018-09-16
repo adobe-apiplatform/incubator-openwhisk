@@ -17,6 +17,7 @@
 
 package whisk.common
 
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.AbstractQueuedSynchronizer
 import scala.annotation.tailrec
 
@@ -24,10 +25,13 @@ import scala.annotation.tailrec
  * A Semaphore that has a specialized release process that optionally allows reduction of permits in batches.
  * When permit size after release is a factor of reductionSize, the release process will reset permits to state + 1 - reductionSize;
  * otherwise the release will reset permits to state + 1.
+ * It also maintains an operationCount where a tryAquire + release is a single operation,
+ * so that we can know once all operations are completed.
  * @param maxAllowed
  * @param reductionSize
  */
 class ResizableSemaphore(maxAllowed: Int, reductionSize: Int) {
+  private val operationCount = new AtomicInteger(0)
   class Sync extends AbstractQueuedSynchronizer {
     setState(maxAllowed)
 
@@ -78,6 +82,7 @@ class ResizableSemaphore(maxAllowed: Int, reductionSize: Int) {
   def tryAcquire(acquires: Int = 1): Boolean = {
     require(acquires > 0, "cannot acquire negative or no permits")
     if (sync.nonFairTryAcquireShared(acquires) >= 0) {
+      operationCount.incrementAndGet()
       true
     } else {
       false
@@ -88,13 +93,23 @@ class ResizableSemaphore(maxAllowed: Int, reductionSize: Int) {
    * Releases the given amount of permits
    *
    * @param acquires the number of permits to release
+   * @return (releaseMemory, releaseAction) releaseMemory is true if concurrency count is a factor of reductionSize
+   *         releaseAction is true if the operationCount reaches 0
    */
-  def release(acquires: Int = 1): Boolean = {
+  def release(acquires: Int = 1, opComplete: Boolean): (Boolean, Boolean) = {
     require(acquires > 0, "cannot release negative or no permits")
-    sync.tryReleaseSharedWithResult(acquires)
+    //release always succeeds, so we can always adjust the operationCount
+    val releaseAction = if (opComplete) { // an operation completion
+      operationCount.decrementAndGet() == 0
+    } else { //otherwise an allocation + operation initialization
+      operationCount.incrementAndGet() == 0
+    }
+    (sync.tryReleaseSharedWithResult(acquires), releaseAction)
   }
 
   /** Returns the number of currently available permits. Possibly negative. */
   def availablePermits: Int = sync.permits
 
+  //for testing
+  def counter = operationCount.get()
 }

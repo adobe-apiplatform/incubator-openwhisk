@@ -505,12 +505,12 @@ class ShardingContainerPoolBalancerTests
     var nextInvoker = home
     ids.toList.grouped(maxActivationsPerInvoker).zipWithIndex.foreach { g =>
       val remaining = rem(g._1.size)
-      val leftover = balancer.schedulingState._invokerSlots
+      val concurrentState = balancer.schedulingState._invokerSlots
         .lift(nextInvoker)
         .get
         .concurrentState(fqn)
-        .availablePermits
-      leftover shouldBe remaining
+      concurrentState.availablePermits shouldBe remaining
+      concurrentState.counter shouldBe g._1.size
       nextInvoker = (nextInvoker + stepSize) % numInvokers
     }
 
@@ -524,16 +524,16 @@ class ShardingContainerPoolBalancerTests
 
     //verify invokers go back to unused state
     invokers.foreach { i =>
-      val invokerStates = balancer.schedulingState._invokerSlots
+      val concurrentState = balancer.schedulingState._invokerSlots
         .lift(i.id.toInt)
         .get
         .concurrentState
         .get(fqn)
 
-      invokerStates.map { cstate =>
-        cstate.availablePermits shouldBe 0
+      concurrentState shouldBe None
+      balancer.schedulingState._invokerSlots.lift(i.id.toInt).map { i =>
+        i.availablePermits shouldBe invokerMem.toMB
       }
-      balancer.schedulingState._invokerSlots.lift(i.id.toInt).map(_.availablePermits shouldBe invokerMem.toMB)
 
     }
   }

@@ -31,8 +31,8 @@ class ResizableSemaphoreTests extends FlatSpec with Matchers {
     an[IllegalArgumentException] should be thrownBy s.tryAcquire(0)
     an[IllegalArgumentException] should be thrownBy s.tryAcquire(-1)
 
-    an[IllegalArgumentException] should be thrownBy s.release(0)
-    an[IllegalArgumentException] should be thrownBy s.release(-1)
+    an[IllegalArgumentException] should be thrownBy s.release(0, true)
+    an[IllegalArgumentException] should be thrownBy s.release(-1, true)
   }
 
   it should "allow to acquire the defined amount of permits only" in {
@@ -62,24 +62,100 @@ class ResizableSemaphoreTests extends FlatSpec with Matchers {
   it should "allow to resize permits when factor of reductionSize is reached during release" in {
     val s = new ResizableSemaphore(2, 5)
     s.tryAcquire() shouldBe true // 1 permit left
+    s.counter shouldBe 1
     s.tryAcquire() shouldBe true // 0 permits left
+    s.counter shouldBe 2
     s.tryAcquire() shouldBe false
-    s.release(4) shouldBe false // 4 permits left
+    s.counter shouldBe 2
+    s.release(4, false) shouldBe (false, false) // 4 permits left
+    s.counter shouldBe 3
+
     s.tryAcquire(4) shouldBe true
+    s.counter shouldBe 4
+
     s.tryAcquire() shouldBe false
-    s.release(5) shouldBe true // 0 permits left (5 permits reduced to 0)
+    s.counter shouldBe 4
+    s.release(5, false) shouldBe (true, false) // 0 permits left (5 permits reduced to 0)
+    s.counter shouldBe 5
     s.tryAcquire() shouldBe false
-    s.release(6) shouldBe false // 5 permits left
+    s.counter shouldBe 5
+    s.release(6, false) shouldBe (false, false) // 5 permits left
+    s.counter shouldBe 6
     s.tryAcquire() shouldBe true // 5 permits left
+    s.counter shouldBe 7
     s.tryAcquire() shouldBe true // 4 permits left
+    s.counter shouldBe 8
     s.tryAcquire() shouldBe true // 3 permits left
+    s.counter shouldBe 9
     s.tryAcquire() shouldBe true // 2 permits left
+    s.counter shouldBe 10
     s.tryAcquire() shouldBe true // 1 permits left
+    s.counter shouldBe 11
     s.tryAcquire() shouldBe true // 0 permits left
+    s.counter shouldBe 12
+
     s.tryAcquire() shouldBe false
-    s.release(10) shouldBe true // 5 permits left (10 permits reduced to 5)
+    s.counter shouldBe 12
+    s.release(10, false) shouldBe (true, false) // 5 permits left (10 permits reduced to 5)
+    s.counter shouldBe 13
     s.tryAcquire() shouldBe true
+    s.counter shouldBe 14
     s.availablePermits shouldBe 4
+    s.release(1, true) shouldBe (true, false)
+    s.counter shouldBe 13
+    s.availablePermits shouldBe 0
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 12
+    s.availablePermits shouldBe 1
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 11
+    s.availablePermits shouldBe 2
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 10
+    s.availablePermits shouldBe 3
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 9
+    s.availablePermits shouldBe 4
+
+    s.release(1, true) shouldBe (true, false)
+    s.counter shouldBe 8
+    s.availablePermits shouldBe 0
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 7
+    s.availablePermits shouldBe 1
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 6
+    s.availablePermits shouldBe 2
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 5
+    s.availablePermits shouldBe 3
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 4
+    s.availablePermits shouldBe 4
+
+    s.release(1, true) shouldBe (true, false)
+    s.counter shouldBe 3
+    s.availablePermits shouldBe 0
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 2
+    s.availablePermits shouldBe 1
+
+    s.release(1, true) shouldBe (false, false)
+    s.counter shouldBe 1
+    s.availablePermits shouldBe 2
+
+    s.release(1, true) shouldBe (false, true)
+    s.counter shouldBe 0
+    s.availablePermits shouldBe 3
   }
 
   it should "not give away more permits even under concurrent load" in {
@@ -93,4 +169,15 @@ class ResizableSemaphoreTests extends FlatSpec with Matchers {
       acquires should contain theSameElementsAs result
     }
   }
+
+  it should "release permits even under concurrent load" in {
+    val s = new ResizableSemaphore(32, 35)
+    // try to acquire more permits than allowed in parallel
+    val acquires = (0 until 64).par.map(_ => s.tryAcquire()).seq
+
+    (0 until 32).par.map(_ => s.release(1, true))
+    s.counter shouldBe 0
+
+  }
+
 }
