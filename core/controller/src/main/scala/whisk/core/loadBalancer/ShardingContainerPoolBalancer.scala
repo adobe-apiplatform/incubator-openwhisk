@@ -142,12 +142,8 @@ import scala.util.{Failure, Success}
 class ShardingContainerPoolBalancer(
   config: WhiskConfig,
   controllerInstance: ControllerInstanceId,
-  private val feedFactory: (ActorRefFactory, MessagingProvider, (Array[Byte]) => Future[Unit]) => ActorRef,
-  private val invokerPoolFactory: (ActorRefFactory,
-                                   MessagingProvider,
-                                   MessageProducer,
-                                   (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
-                                   Option[ActorRef]) => ActorRef,
+  private val feedFactory: FeedFactory,
+  private val invokerPoolFactory: InvokerPoolFactory,
   lbConfig: ShardingContainerPoolBalancerConfig =
     loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer),
   private val messagingProvider: MessagingProvider = SpiLoader.get[MessagingProvider])(
@@ -346,7 +342,8 @@ class ShardingContainerPoolBalancer(
    * Subscribes to active acks (completion messages from the invokers), and
    * registers a handler for received active acks from invokers.
    */
-  private val activationFeed = feedFactory(actorSystem, messagingProvider, processAcknowledgement)
+  private val activationFeed: ActorRef =
+    feedFactory.createFeed(actorSystem, messagingProvider, processAcknowledgement)
 
   /** 4. Get the active-ack message and parse it */
   protected[loadBalancer] def processAcknowledgement(bytes: Array[Byte]): Future[Unit] = Future {
@@ -449,7 +446,12 @@ class ShardingContainerPoolBalancer(
   }
 
   private val invokerPool =
-    invokerPoolFactory(actorSystem, messagingProvider, messageProducer, sendActivationToInvoker, Some(monitor))
+    invokerPoolFactory.createInvokerPool(
+      actorSystem,
+      messagingProvider,
+      messageProducer,
+      sendActivationToInvoker,
+      Some(monitor))
 }
 
 object ShardingContainerPoolBalancer extends LoadBalancerProvider {
@@ -479,33 +481,39 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
     val maxActiveAcksPerPoll = 128
     val activeAckPollDuration = 1.second
 
-    val feedFactory = (f: ActorRefFactory, provider: MessagingProvider, acker: (Array[Byte]) => Future[Unit]) =>
-      f.actorOf(Props {
-        new MessageFeed(
-          "activeack",
-          logging,
-          provider.getConsumer(whiskConfig, activeAckTopic, activeAckTopic, maxPeek = maxActiveAcksPerPoll),
-          maxActiveAcksPerPoll,
-          activeAckPollDuration,
-          acker)
-      })
-
-    val invokerPoolFactory = (f: ActorRefFactory,
-                              messagingProvider: MessagingProvider,
-                              messageProducer: MessageProducer,
-                              send: (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
-                              monitor: Option[ActorRef]) => {
-
-      InvokerPool.prepare(instance, WhiskEntityStore.datastore())
-
-      f.actorOf(
-        InvokerPool.props(
-          (f, i) => f.actorOf(InvokerActor.props(i, instance)),
-          (m, i) => send(messageProducer, m, i),
-          messagingProvider.getConsumer(whiskConfig, s"health${instance.asString}", "health", maxPeek = 128),
-          monitor))
+    val feedFactory = new FeedFactory {
+      def createFeed(f: ActorRefFactory, provider: MessagingProvider, acker: Array[Byte] => Future[Unit]) = {
+        f.actorOf(Props {
+          new MessageFeed(
+            "activeack",
+            logging,
+            provider.getConsumer(whiskConfig, activeAckTopic, activeAckTopic, maxPeek = maxActiveAcksPerPoll),
+            maxActiveAcksPerPoll,
+            activeAckPollDuration,
+            acker)
+        })
+      }
     }
 
+    val invokerPoolFactory = new InvokerPoolFactory {
+      override def createInvokerPool(
+        actorRefFactory: ActorRefFactory,
+        messagingProvider: MessagingProvider,
+        messagingProducer: MessageProducer,
+        sendActivationToInvoker: (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
+        monitor: Option[ActorRef]): ActorRef = {
+
+        InvokerPool.prepare(instance, WhiskEntityStore.datastore())
+
+        actorRefFactory.actorOf(
+          InvokerPool.props(
+            (f, i) => f.actorOf(InvokerActor.props(i, instance)),
+            (m, i) => sendActivationToInvoker(messagingProducer, m, i),
+            messagingProvider.getConsumer(whiskConfig, s"health${instance.asString}", "health", maxPeek = 128),
+            monitor))
+      }
+
+    }
     new ShardingContainerPoolBalancer(whiskConfig, instance, feedFactory, invokerPoolFactory)
   }
 
