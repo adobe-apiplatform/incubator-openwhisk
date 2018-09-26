@@ -112,15 +112,15 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
             // Schedule a job to a warm container
             ContainerPool
               .schedule(r.action, r.msg.user.namespace.name, freePool)
-              .map(container => (container, "warm", container._2.activeActivationCount))
+              .map(container => (container, "warm"))
               .orElse(
                 // There was no warm container. Try to take a prewarm container or a cold container.
 
                 // Is there enough space to create a new container or do other containers have to be removed?
                 if (hasPoolSpaceFor(busyPool ++ freePool, r.action.limits.memory.megabytes.MB)) {
                   takePrewarmContainer(r.action)
-                    .map(container => (container, "prewarmed", container._2.activeActivationCount))
-                    .orElse(Some(createContainer(r.action.limits.memory.megabytes.MB), "cold", 0))
+                    .map(container => (container, "prewarmed"))
+                    .orElse(Some(createContainer(r.action.limits.memory.megabytes.MB), "cold"))
                 } else None)
               .orElse(
                 // Remove a container and create a new one for the given job
@@ -133,12 +133,13 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
                   .headOption
                   .map(_ =>
                     takePrewarmContainer(r.action)
-                      .map(container => (container, "recreatedPrewarm", container._2.activeActivationCount))
-                      .getOrElse(createContainer(r.action.limits.memory.megabytes.MB), "recreated", 0)))
+                      .map(container => (container, "recreatedPrewarm"))
+                      .getOrElse(createContainer(r.action.limits.memory.megabytes.MB), "recreated")))
+
           } else None
 
         createdContainer match {
-          case Some(((actor, data), containerState, activeActivations)) =>
+          case Some(((actor, data), containerState)) =>
             //only move to busyPool if max reached
             if (data.activeActivationCount + 1 >= r.action.limits.concurrency.maxConcurrent) {
               if (r.action.limits.concurrency.maxConcurrent > 1) {
@@ -158,7 +159,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
               runBuffer.dequeueOption.foreach { case (run, _) => self ! run }
             }
             actor ! r // forwards the run request to the container
-            logContainerStart(r, containerState, activeActivations)
+            logContainerStart(r, containerState, data.activeActivationCount)
           case None =>
             // this can also happen if createContainer fails to start a new container, or
             // if a job is rescheduled but the container it was allocated to has not yet destroyed itself
@@ -333,8 +334,8 @@ object ContainerPool {
                                            invocationNamespace: EntityName,
                                            idles: Map[A, ContainerData]): Option[(A, ContainerData)] = {
     idles.find {
-      case c @ (_, WarmedData(_, `invocationNamespace`, `action`, _, _))
-          if c._2.activeActivationCount < action.limits.concurrency.maxConcurrent =>
+      case (_, WarmedData(_, `invocationNamespace`, `action`, _, activeActivationCount))
+          if activeActivationCount < action.limits.concurrency.maxConcurrent =>
         true
       case _ => false
     }
