@@ -430,16 +430,19 @@ class ShardingContainerPoolBalancerTests
   }
   def testActivationBatch(numActivations: Int): Unit = {
     //setup mock messaging
-    val feedProbe = (_: ActorRefFactory, _: MessagingProvider, _: (Array[Byte]) => Future[Unit]) => {
-      TestProbe().testActor
-    }
+    val feedProbe = new FeedFactory {
+      def createFeed(f: ActorRefFactory, m: MessagingProvider, p: (Array[Byte]) => Future[Unit]) =
+        TestProbe().testActor
 
-    val invokerPoolProbe = (_: ActorRefFactory,
-                            _: MessagingProvider,
-                            _: MessageProducer,
-                            _: (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
-                            _: Option[ActorRef]) => {
-      TestProbe().testActor
+    }
+    val invokerPoolProbe = new InvokerPoolFactory {
+      override def createInvokerPool(
+        actorRefFactory: ActorRefFactory,
+        messagingProvider: MessagingProvider,
+        messagingProducer: MessageProducer,
+        sendActivationToInvoker: (MessageProducer, ActivationMessage, InvokerInstanceId) => Future[RecordMetadata],
+        monitor: Option[ActorRef]): ActorRef =
+        TestProbe().testActor
     }
     val balancer =
       new ShardingContainerPoolBalancer(
