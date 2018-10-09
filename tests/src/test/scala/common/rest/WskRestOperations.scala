@@ -767,6 +767,30 @@ class RestActivationOperations(implicit val actorSystem: ActorSystem)
     } getOrElse Left(s"Cannot find activation id from '$activation'")
 
   }
+  override def waitForActivationLogs(activationId: String,
+                                     initialWait: Duration,
+                                     pollPeriod: Duration,
+                                     totalWait: Duration)(implicit wp: WskProps): Either[String, JsObject] = {
+    val activationLogs = waitfor(
+      () => {
+        val result = logs(Some(activationId), expectedExitCode = DONTCARE_EXIT)(wp)
+        if (result.statusCode == NotFound) {
+          null
+        } else {
+          result
+        }
+      },
+      initialWait,
+      pollPeriod,
+      totalWait)
+    Try {
+      assert(activationLogs.statusCode == OK)
+      assert(activationLogs.respBody.fields.get("logs").map(_.convertTo[JsArray].elements.length).getOrElse(0) > 0)
+      activationLogs.respBody
+    } map {
+      Right(_)
+    } getOrElse Left(s"Cannot find activation logs from '${activationLogs.respBody}'")
+  }
 
   override def logs(activationId: Option[String] = None,
                     expectedExitCode: Int = OK.intValue,

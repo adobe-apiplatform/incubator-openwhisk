@@ -675,6 +675,48 @@ class CliActivationOperations(val wsk: RunCliCmd) extends ActivationOperations w
     } getOrElse Left(s"$activationId not found")
   }
 
+  /**
+   * Polls for an activation matching the given id. If found
+   * return Right(activation) else Left(result of running CLI command).
+   *
+   * @return either Left(error message) or Right(activation as JsObject)
+   */
+  override def waitForActivationLogs(
+    activationId: String,
+    initialWait: Duration = 1 second,
+    pollPeriod: Duration = 1 second,
+    totalWait: Duration = 30 seconds)(implicit wp: WskProps): Either[String, JsObject] = {
+    val activation = waitfor(
+      () => {
+        val result =
+          wsk
+            .cli(
+              wp.overrides ++ Seq(noun, "logs", activationId, "--auth", wp.authKey),
+              expectedExitCode = DONTCARE_EXIT)
+        println(s"RESULT ${result}")
+        if (result.exitCode == NOT_FOUND) {
+          null
+        } else if (result.exitCode == SUCCESS_EXIT) {
+          Right(result.stdout)
+        } else Left(s"$result")
+      },
+      initialWait,
+      pollPeriod,
+      totalWait)
+
+    Option(activation) map {
+      case Right(stdout) =>
+        Try {
+          // strip first line and convert the rest to JsObject
+          //assert(stdout.startsWith("ok: got activation"))
+          WskOperations.parseJsonString(stdout)
+        } map {
+          Right(_)
+        } getOrElse Left(s"cannot parse activation logs from '$stdout'")
+      case Left(error) => Left(error)
+    } getOrElse Left(s"$activationId not found")
+  }
+
   /** Used in polling for activations to record partial results from retry poll. */
   private case class PartialResult(ids: Seq[String]) extends Throwable
 }

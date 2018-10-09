@@ -46,6 +46,12 @@ public class WhiskProperties {
      */
     protected static final String WHISK_PROPS_FILE = "whisk.properties";
 
+    private static final String WHISK_LOGSTORE_IS_EXTERNAL = "whisk.logstore.external";
+
+    private static final String WHISK_LOGSTORE_IS_UTF = "whisk.logstore.utf";
+
+    private static final String WHISK_LOGSTORE_DELAY = "whisk.logstore.delay";
+
     /**
      * Default concurrency level if otherwise unspecified
      */
@@ -355,6 +361,33 @@ public class WhiskProperties {
      * python interpreter.
      */
     public static final String python = "python";
+
+    public static final boolean isExternalLogstore() {
+        String externalLogs = getPropFromSystemOrEnv(WHISK_LOGSTORE_IS_EXTERNAL);
+        if (externalLogs == null || !externalLogs.toLowerCase().equals( "true")) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    public static final int logStoreDelay() {
+        String logStoreDelay = getPropFromSystemOrEnv(WHISK_LOGSTORE_DELAY);
+        if (logStoreDelay == null) {
+            return 0;
+        } else {
+            return Integer.parseInt(logStoreDelay);
+        }
+    }
+
+    public static final boolean isUTFLogstore() {
+        String isUtf = getPropFromSystemOrEnv(WHISK_LOGSTORE_IS_UTF);
+        if (isUtf == null || isUtf.toLowerCase().equals( "true")) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 
     protected static File findFileRecursively(String dir, String needle) {
         if (dir != null) {

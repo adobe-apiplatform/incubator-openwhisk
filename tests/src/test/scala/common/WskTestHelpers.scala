@@ -153,6 +153,31 @@ object ActivationResult extends DefaultJsonProtocol {
   }
 }
 
+case class ActivationLogsResponse(result: Option[JsObject], status: String, success: Boolean)
+
+object ActivationLogsResponse extends DefaultJsonProtocol {
+  implicit val serdes = jsonFormat3(ActivationLogsResponse.apply)
+}
+
+case class ActivationLogs(logs: Option[List[String]])
+object ActivationLogs extends DefaultJsonProtocol {
+
+  implicit val serdes = new RootJsonFormat[ActivationLogs] {
+    private val format = jsonFormat1(ActivationLogs.apply)
+
+    def write(result: ActivationLogs) = format.write(result)
+
+    def read(value: JsValue) = {
+      val obj = value.asJsObject
+      Try {
+        val logs = obj.fields.get("logs").map(_.convertTo[List[String]])
+        new ActivationLogs(logs)
+      } getOrElse deserializationError("Failed to deserialize the activation logs result.")
+
+    }
+  }
+}
+
 /** The result of a rule-activation written into the trigger activation */
 case class RuleActivationResult(statusCode: Int, success: Boolean, activationId: String, action: String)
 object RuleActivationResult extends DefaultJsonProtocol {
@@ -276,6 +301,28 @@ trait WskTestHelpers extends Matchers {
   def withActivation(wsk: ActivationOperations, activationId: String)(check: ActivationResult => Unit)(
     implicit wskprops: WskProps): Unit = {
     withActivation(wsk, activationId, 1.second, 1.second, 60.seconds)(check)
+  }
+
+  def withActivationLogs(wsk: ActivationOperations,
+                         activationId: String,
+                         initialWait: Duration,
+                         pollPeriod: Duration,
+                         totalWait: Duration)(check: ActivationLogs => Unit)(implicit wskprops: WskProps): Unit = {
+    val id = activationId
+    val activationLogs = wsk.waitForActivationLogs(id, initialWait, pollPeriod, totalWait)
+
+    activationLogs match {
+      case Left(reason) => fail(s"error waiting for logs of activation $id for $totalWait: $reason")
+      case Right(result) =>
+        withRethrowingPrint(s"check failed for logs of activation $id: $result") {
+          check(result.convertTo[ActivationLogs])
+        }
+    }
+  }
+  def withActivationLogs(wsk: ActivationOperations, activationId: String)(check: ActivationLogs => Unit)(
+    implicit wskprops: WskProps): Unit = {
+    val defaultDelay = WhiskProperties.logStoreDelay().seconds
+    withActivationLogs(wsk, activationId, defaultDelay, 1.second, 60.seconds)(check)
   }
 
   /**

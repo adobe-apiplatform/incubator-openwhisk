@@ -47,8 +47,7 @@ trait SwaggerValidator {
         WhitelistRules.messageContains("kind"),
         WhitelistRules.messageContains("Instance value"),
         WhitelistRules.messageContains("not found"),
-        WhitelistRules.pathContains("/actions/"),
-        WhitelistRules.methodIs(io.swagger.models.HttpMethod.PUT)))
+        WhitelistRules.pathContains("/actions/")))
     .withRule(
       "Ignore tests that check for invalid DELETEs and PUTs on actions",
       WhitelistRules.anyOf(

@@ -322,6 +322,9 @@ trait ActivationOperations {
   def waitForActivation(activationId: String, initialWait: Duration, pollPeriod: Duration, totalWait: Duration)(
     implicit wp: WskProps): Either[String, JsObject]
 
+  def waitForActivationLogs(activationId: String, initialWait: Duration, pollPeriod: Duration, totalWait: Duration)(
+    implicit wp: WskProps): Either[String, JsObject]
+
   def get(activationId: Option[String] = None,
           expectedExitCode: Int = SUCCESS_EXIT,
           fieldFilter: Option[String] = None,
