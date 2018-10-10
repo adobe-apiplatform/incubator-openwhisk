@@ -320,7 +320,9 @@ abstract class WskRuleTests extends TestHelpers with WskTestHelpers {
           actionActivation.response.result shouldBe Some(testResult)
         }
         withActivation(wsk.activation, action2Result.activationId) { actionActivation =>
-          actionActivation.logs.get.mkString(" ") should include(s"hello, $testString")
+          checkLogs(wsk.activation, actionActivation, { logs =>
+            logs.get.mkString(" ") should include(s"hello, $testString")
+          })
         }
       }
   }
@@ -359,7 +361,9 @@ abstract class WskRuleTests extends TestHelpers with WskTestHelpers {
               actionActivation.response.result shouldBe Some(JsObject("count" -> payload.split(" ").length.toJson))
             }
             withActivation(wsk.activation, action2Result.activationId) { actionActivation =>
-              actionActivation.logs.get.mkString(" ") should include(s"hello, $payload")
+              checkLogs(wsk.activation, actionActivation, { logs =>
+                logs.get.mkString(" ") should include(s"hello, $payload")
+              })
             }
           }
       }

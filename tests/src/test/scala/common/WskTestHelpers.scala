@@ -382,4 +382,16 @@ trait WskTestHelpers extends Matchers {
     println("!!! WARNING: method is deprecated; use wsk.parseJsonString instead")
     if (isCli) removeCLIHeader(response).parseJson.asJsObject else response.parseJson.asJsObject
   }
+
+  def checkLogs(activationOps: ActivationOperations,
+                activation: ActivationResult,
+                check: (Option[List[String]]) => Unit)(implicit wskprops: WskProps) = {
+    if (WhiskProperties.isExternalLogstore) {
+      withActivationLogs(activationOps, activation.activationId) { activationLogs =>
+        check(activationLogs.logs)
+      }
+    } else {
+      check(activation.logs)
+    }
+  }
 }

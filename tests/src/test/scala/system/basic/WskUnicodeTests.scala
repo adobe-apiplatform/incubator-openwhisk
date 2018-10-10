@@ -72,30 +72,39 @@ class WskUnicodeTests extends TestHelpers with WskTestHelpers with JsHelpers wit
     }
   }
 
-  // tolerate missing files rather than throw an exception
-  actionKinds.map(k => (k.kind, getFileLocation(k.kind))).collect {
-    case (actionKind, file @ Some(_)) =>
-      s"$actionKind action" should "Ensure that UTF-8 in supported in source files, input params, logs, and output results" in withAssetCleaner(
-        wskprops) { (wp, assetHelper) =>
-        val name = s"unicodeGalore.${actionKind.replace(":", "")}"
+  if (WhiskProperties.isUTFLogstore) {
+    // tolerate missing files rather than throw an exception
+    actionKinds.map(k => (k.kind, getFileLocation(k.kind))).collect {
+      case (actionKind, file @ Some(_)) =>
+        s"$actionKind action" should "Ensure that UTF-8 in supported in source files, input params, logs, and output results" in withAssetCleaner(
+          wskprops) { (wp, assetHelper) =>
+          val name = s"unicodeGalore.${actionKind.replace(":", "")}"
 
-        assetHelper.withCleaner(wsk.action, name) { (action, _) =>
-          action
-            .create(name, file, main = main(actionKind), kind = Some(actionKind), timeout = Some(activationMaxDuration))
+          assetHelper.withCleaner(wsk.action, name) { (action, _) =>
+            action
+              .create(
+                name,
+                file,
+                main = main(actionKind),
+                kind = Some(actionKind),
+                timeout = Some(activationMaxDuration))
+          }
+
+          withActivation(
+            wsk.activation,
+            wsk.action.invoke(name, parameters = Map("delimiter" -> JsString("❄"))),
+            totalWait = activationPollDuration) { activation =>
+            val response = activation.response
+            response.result.get.fields.get("error") shouldBe empty
+            response.result.get.fields.get("winter") should be(Some(JsString("❄ ☃ ❄")))
+            checkLogs(wsk.activation, activation, { logs =>
+              logs.toList.flatten.mkString(" ") should include("❄ ☃ ❄")
+            })
+          }
         }
-
-        withActivation(
-          wsk.activation,
-          wsk.action.invoke(name, parameters = Map("delimiter" -> JsString("❄"))),
-          totalWait = activationPollDuration) { activation =>
-          val response = activation.response
-          response.result.get.fields.get("error") shouldBe empty
-          response.result.get.fields.get("winter") should be(Some(JsString("❄ ☃ ❄")))
-
-          activation.logs.toList.flatten.mkString(" ") should include("❄ ☃ ❄")
-        }
-      }
+    }
   }
+
 }
 
 protected[basic] object WskUnicodeTests extends DefaultJsonProtocol {

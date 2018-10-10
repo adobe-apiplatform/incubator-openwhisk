@@ -516,9 +516,12 @@ class WskSequenceTests extends TestHelpers with WskTestHelpers with StreamLoggin
       val getComponentActivation = wsk.activation.get(Some(componentId))
       withActivation(wsk.activation, getComponentActivation, totalWait = allowedActionDuration) { componentActivation =>
         withClue(componentActivation) {
-          componentActivation.logs shouldBe defined
-          val logs = componentActivation.logs.get.mkString(" ")
-          regex.findFirstIn(logs) shouldBe defined
+          checkLogs(wsk.activation, componentActivation, { componentLogs =>
+            componentLogs shouldBe defined
+            val logs = componentLogs.get.mkString(" ")
+            regex.findFirstIn(logs) shouldBe defined
+          })
+
         }
       }
     }

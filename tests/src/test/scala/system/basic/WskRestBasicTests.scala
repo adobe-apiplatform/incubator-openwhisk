@@ -311,23 +311,27 @@ class WskRestBasicTests extends TestHelpers with WskTestHelpers with WskActorSys
       }
   }
 
-  it should "create, and invoke an action that utilizes dockerskeleton with native zip" in withAssetCleaner(wskprops) {
-    val name = "dockerContainerWithZip"
-    (wp, assetHelper) =>
-      assetHelper.withCleaner(wsk.action, name) {
-        // this docker image will be need to be pulled from dockerhub and hence has to be published there first
-        (action, _) =>
-          action.create(name, Some(TestUtils.getTestActionFilename("blackbox.zip")), kind = Some("native"))
-      }
+  if (WhiskProperties.isNativeAllowed) {
+    it should "create, and invoke an action that utilizes dockerskeleton with native zip" in withAssetCleaner(wskprops) {
+      val name = "dockerContainerWithZip"
+      (wp, assetHelper) =>
+        assetHelper.withCleaner(wsk.action, name) {
+          // this docker image will be need to be pulled from dockerhub and hence has to be published there first
+          (action, _) =>
+            action.create(name, Some(TestUtils.getTestActionFilename("blackbox.zip")), kind = Some("native"))
+        }
 
-      val run = wsk.action.invoke(name, Map.empty)
-      withActivation(wsk.activation, run) { activation =>
-        activation.response.result shouldBe Some(JsObject("msg" -> "hello zip".toJson))
-        activation.logs shouldBe defined
-        val logs = activation.logs.get.toString
-        logs should include("This is an example zip used with the docker skeleton action.")
-        logs should not include Container.ACTIVATION_LOG_SENTINEL
-      }
+        val run = wsk.action.invoke(name, Map.empty)
+        withActivation(wsk.activation, run) { activation =>
+          activation.response.result shouldBe Some(JsObject("msg" -> "hello zip".toJson))
+          checkLogs(wsk.activation, activation, l => {
+            l shouldBe defined
+            val logs = l.get.toString
+            logs should include("This is an example zip used with the docker skeleton action.")
+            logs should not include Container.ACTIVATION_LOG_SENTINEL
+          })
+        }
+    }
   }
 
   it should "create, and invoke an action using a parameter file" in withAssetCleaner(wskprops) {
@@ -364,7 +368,7 @@ class WskRestBasicTests extends TestHelpers with WskTestHelpers with WskActorSys
       result.getFieldJsValue("publish") shouldBe JsFalse
       result.getField("version") shouldBe "0.0.1"
       val exec = result.getFieldJsObject("exec")
-      RestResult.getField(exec, "kind") shouldBe "nodejs:6"
+      RestResult.getField(exec, "kind") shouldBe WhiskProperties.defaultNodejsRuntime()
       RestResult.getField(exec, "code") should not be ""
       result.getFieldJsValue("parameters") shouldBe JsArray(
         JsObject("key" -> JsString("payload"), "value" -> JsString("test")))
@@ -376,12 +380,12 @@ class WskRestBasicTests extends TestHelpers with WskTestHelpers with WskActorSys
                                                             "value" -> JsBoolean(false)),
                                                           JsObject(
                                                             "key" -> JsString("exec"),
-                                                            "value" -> JsString("nodejs:6")))
+                                                            "value" -> JsString(
+                                                              WhiskProperties.defaultNodejsRuntime())))
                                                       } else {
-                                                        JsArray(
-                                                          JsObject(
-                                                            "key" -> JsString("exec"),
-                                                            "value" -> JsString("nodejs:6")))
+                                                        JsArray(JsObject(
+                                                          "key" -> JsString("exec"),
+                                                          "value" -> JsString(WhiskProperties.defaultNodejsRuntime())))
                                                       })
       result.getFieldJsValue("limits") shouldBe JsObject(
         "timeout" -> JsNumber(60000),
@@ -495,7 +499,9 @@ class WskRestBasicTests extends TestHelpers with WskTestHelpers with WskActorSys
                               "name" -> JsString("paramName2"),
                               "description" -> JsString("Parameter description 2")))),
                         JsObject("key" -> WhiskAction.provideApiKeyAnnotationName.toJson, "value" -> JsBoolean(false)),
-                        JsObject("key" -> JsString("exec"), "value" -> JsString("nodejs:6")))
+                        JsObject(
+                          "key" -> JsString("exec"),
+                          "value" -> JsString(WhiskProperties.defaultNodejsRuntime())))
                     } else {
                       JsArray(
                         JsObject("key" -> JsString("description"), "value" -> JsString("Action description")),
@@ -508,7 +514,9 @@ class WskRestBasicTests extends TestHelpers with WskTestHelpers with WskActorSys
                             JsObject(
                               "name" -> JsString("paramName2"),
                               "description" -> JsString("Parameter description 2")))),
-                        JsObject("key" -> JsString("exec"), "value" -> JsString("nodejs:6")))
+                        JsObject(
+                          "key" -> JsString("exec"),
+                          "value" -> JsString(WhiskProperties.defaultNodejsRuntime())))
                     })
   }
 

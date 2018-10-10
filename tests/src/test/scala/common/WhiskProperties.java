@@ -22,6 +22,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.util.Properties;
 
 import static org.junit.Assert.assertTrue;
@@ -46,11 +47,30 @@ public class WhiskProperties {
      */
     protected static final String WHISK_PROPS_FILE = "whisk.properties";
 
+    /**
+     * Is the log store external? (will require use of 'activation logs' to inspect logs)
+     */
     private static final String WHISK_LOGSTORE_IS_EXTERNAL = "whisk.logstore.external";
 
+    /**
+     * Does log store support UTF logging?
+     */
     private static final String WHISK_LOGSTORE_IS_UTF = "whisk.logstore.utf";
 
+    /**
+     * Delay before invoking 'activation logs' to fetch logs
+     */
     private static final String WHISK_LOGSTORE_DELAY = "whisk.logstore.delay";
+
+    /**
+     * Default nodejs runtime
+     */
+    private static final String WHISK_RUNTIME_NODEJS_DEFAULT = "whisk.runtime.nodejs.default";
+
+    /**
+     * Does test target support dockerskeleton actions?
+     */
+    private static final String WHISK_RUNTIME_NATIVE_ALLOWED = "whisk.runtime.native.allowed";
 
     /**
      * Default concurrency level if otherwise unspecified
@@ -362,6 +382,9 @@ public class WhiskProperties {
      */
     public static final String python = "python";
 
+    /**
+     * When using an external logstore, do not use 'activation get' to inspect logs (use 'activation logs')
+     */
     public static final boolean isExternalLogstore() {
         String externalLogs = getPropFromSystemOrEnv(WHISK_LOGSTORE_IS_EXTERNAL);
         if (externalLogs == null || !externalLogs.toLowerCase().equals( "true")) {
@@ -371,6 +394,9 @@ public class WhiskProperties {
         }
     }
 
+    /**
+     * Time to wait before calling 'activation logs' (since log collection can take extra time when using external log store)
+     */
     public static final int logStoreDelay() {
         String logStoreDelay = getPropFromSystemOrEnv(WHISK_LOGSTORE_DELAY);
         if (logStoreDelay == null) {
@@ -380,9 +406,33 @@ public class WhiskProperties {
         }
     }
 
+    /**
+     * Does log store support UTF logging?
+     */
     public static final boolean isUTFLogstore() {
         String isUtf = getPropFromSystemOrEnv(WHISK_LOGSTORE_IS_UTF);
         if (isUtf == null || isUtf.toLowerCase().equals( "true")) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * What is the default nodejs kind?
+     */
+    public static final String defaultNodejsRuntime(){
+        String defaultNodejsRuntime = getPropFromSystemOrEnv(WHISK_RUNTIME_NODEJS_DEFAULT);
+        if (defaultNodejsRuntime == null) {
+            return "nodejs:6";
+        } else {
+            return defaultNodejsRuntime;
+        }
+    }
+
+    public static final boolean isNativeAllowed() {
+        String nativeAllowed = getPropFromSystemOrEnv(WHISK_RUNTIME_NATIVE_ALLOWED);
+        if (nativeAllowed == null || nativeAllowed.toLowerCase().equals( "true")) {
             return true;
         } else {
             return false;

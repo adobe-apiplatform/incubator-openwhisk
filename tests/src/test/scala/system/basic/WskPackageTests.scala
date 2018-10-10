@@ -109,9 +109,13 @@ class WskPackageTests extends TestHelpers with WskTestHelpers with WskActorSyste
     // Check that inherited parameters are passed to the action.
     val now = new Date().toString()
     val run = wsk.action.invoke(bindActionName, Map("payload" -> now.toJson))
-    withActivation(wsk.activation, run, totalWait = LOG_DELAY) {
-      _.logs.get.mkString(" ") should include regex (String
-        .format(".*key0: value0.*key1a: value1a.*key1b: value2b.*key2a: value2a.*payload: %s", now))
+    withActivation(wsk.activation, run, totalWait = LOG_DELAY) { activation =>
+      checkLogs(
+        wsk.activation,
+        activation, { logs =>
+          logs.get.mkString(" ") should include regex (String
+            .format(".*key0: value0.*key1a: value1a.*key1b: value2b.*key2a: value2a.*payload: %s", now))
+        })
     }
   }
 
