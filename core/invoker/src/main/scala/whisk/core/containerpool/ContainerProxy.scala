@@ -92,10 +92,26 @@ case object RescheduleJob // job is sent back to parent and could not be process
  * and the container itself.
  *
  * The contract is as follows:
- * 1. Only one job is to be sent to the ContainerProxy at one time. ContainerProxy
+ * 1. If action.limits.concurrency.maxConcurrent == 1:
+ *    Only one job is to be sent to the ContainerProxy at one time. ContainerProxy
  *    will delay all further jobs until a previous job has finished.
- * 2. The next job can be sent to the ContainerProxy after it indicates available
- *    capacity by sending NeedWork to its parent.
+ *
+ *    1a. The next job can be sent to the ContainerProxy after it indicates available
+ *       capacity by sending NeedWork to its parent.
+ *
+ * 2. If action.limits.concurrency.maxConcurrent > 1:
+ *    Parent must coordinate with ContainerProxy to attempt to send only data.action.limits.concurrency.maxConcurrent
+ *    jobs for concurrent processing.
+ *
+ *    Since the current job count is only periodically sent to parent, the number of jobs
+ *    sent to ContainerProxy may exceed data.action.limits.concurrency.maxConcurrent,
+ *    in which case jobs are buffered, so that only a max of action.limits.concurrency.maxConcurrent
+ *    are ever sent into the container concurrently. Parent will NOT be signalled to send more jobs until
+ *    buffered jobs are completed, but their order is not guaranteed.
+ *
+ *    2a. The next job can be sent to the ContainerProxy after ContainerProxy has "concurrent capacity",
+ *        indicated by sending NeedWork to its parent.
+ *
  * 3. A Remove message can be sent at any point in time. Like multiple jobs though,
  *    it will be delayed until the currently running job finishes.
  *
@@ -419,10 +435,10 @@ class ContainerProxy(
     val activation: Future[WhiskActivation] = initialize
       .flatMap { initInterval =>
         //immediately setup warmedData for use (before first execution) so that concurrent actions can use it asap
-        if (!initInterval.isEmpty) {
+        if (initInterval.isDefined) {
           self ! WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now, 1)
         }
-        val parameters = job.msg.content getOrElse JsObject()
+        val parameters = job.msg.content getOrElse JsObject.empty
 
         val authEnvironment = job.msg.user.authkey.toEnvironment
 
