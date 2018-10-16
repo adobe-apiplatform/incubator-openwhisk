@@ -25,7 +25,7 @@ ROOTDIR="$SCRIPTDIR/../.."
 
 cd $ROOTDIR/ansible
 
-$ANSIBLE_CMD -e container_pool_akka_client=true -e runtimes_enable_concurrency=true openwhisk.yml
+$ANSIBLE_CMD openwhisk.yml
 $ANSIBLE_CMD apigateway.yml
 $ANSIBLE_CMD routemgmt.yml
 
