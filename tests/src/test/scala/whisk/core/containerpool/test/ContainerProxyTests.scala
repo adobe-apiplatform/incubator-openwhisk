@@ -73,7 +73,7 @@ class ContainerProxyTests
     EntityPath("actionSpace"),
     EntityName("actionName"),
     exec,
-    limits = ActionLimits(concurrency = ConcurrencyLimit(20)))
+    limits = ActionLimits(concurrency = ConcurrencyLimit(2)))
 
   // create a transaction id to set the start time and control queue time
   val messageTransId = TransactionId(TransactionId.testing.meta.id)
@@ -447,6 +447,8 @@ class ContainerProxyTests
       Promise[(Interval, ActivationResponse)](),
       Promise[(Interval, ActivationResponse)](),
       Promise[(Interval, ActivationResponse)](),
+      Promise[(Interval, ActivationResponse)](),
+      Promise[(Interval, ActivationResponse)](),
       Promise[(Interval, ActivationResponse)]())
     val container = new TestContainer(Some(initPromise), runPromises)
     val factory = createFactory(Future.successful(container))
@@ -488,19 +490,27 @@ class ContainerProxyTests
 
     machine ! Run(concurrentAction, message) //third in Ready state
     machine ! Run(concurrentAction, message) //fourth in Ready state
+    machine ! Run(concurrentAction, message) //fifth in Ready state - will be queued
+    machine ! Run(concurrentAction, message) //sixth in Ready state - will be queued
 
     //third message will go from Ready -> Running -> Ready (after fourth run)
     expectMsg(Transition(machine, Ready, Running))
 
-    //complete the third run
+    //complete the third run (do not request new work yet)
     runPromises(2) complete Try(runInterval, ActivationResponse.success())
-    expectWarmed(invocationNamespace.name, concurrentAction, 1) //when third completes (stays in running)
 
-    //complete the fourth run
+    //complete the fourth run -> dequeue the fifth run (do not request new work yet)
     runPromises(3) complete Try(runInterval, ActivationResponse.success())
-    expectWarmed(invocationNamespace.name, concurrentAction, 0) //when fourth completes
 
-    //back to ready
+    //complete the fifth run (request new work, 1 active remain)
+    runPromises(4) complete Try(runInterval, ActivationResponse.success())
+    expectWarmed(invocationNamespace.name, concurrentAction, 1) //when fifth completes
+
+    //complete the sixth run (request new work 0 active remain)
+    runPromises(5) complete Try(runInterval, ActivationResponse.success())
+    expectWarmed(invocationNamespace.name, concurrentAction, 0) //when sixth completes
+
+    // back to ready
     expectMsg(Transition(machine, Running, Ready))
 
     //timeout + pause after getting back to Ready
@@ -511,12 +521,12 @@ class ContainerProxyTests
     awaitAssert {
       factory.calls should have size 1
       container.initializeCount shouldBe 1
-      container.runCount shouldBe 4
-      collector.calls should have size 4
+      container.runCount shouldBe 6
+      collector.calls should have size 6
       container.suspendCount shouldBe 1
       container.resumeCount shouldBe 0
-      acker.calls should have size 4
-      store.calls should have size 4
+      acker.calls should have size 6
+      store.calls should have size 6
       acker
         .calls(0)
         ._2

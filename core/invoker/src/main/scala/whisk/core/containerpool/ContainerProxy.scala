@@ -24,6 +24,7 @@ import akka.actor.{FSM, Props, Stash}
 import akka.event.Logging.InfoLevel
 import akka.pattern.pipe
 import pureconfig.loadConfigOrThrow
+import scala.collection.immutable
 import spray.json.DefaultJsonProtocol._
 import spray.json._
 import whisk.common.{AkkaLogging, Counter, LoggingMarkers, TransactionId}
@@ -119,7 +120,7 @@ class ContainerProxy(
   implicit val ec = context.system.dispatcher
   implicit val logging = new AkkaLogging(context.system.log)
   var rescheduleJob = false // true iff actor receives a job but cannot process it because actor will destroy itself
-
+  var runBuffer = immutable.Queue.empty[Run] //does not retain order, but does manage jobs that would have pushed past action concurrency limit
   startWith(Uninitialized, NoData())
 
   when(Uninitialized) {
@@ -233,16 +234,18 @@ class ContainerProxy(
     case Event(_: WarmedData, s: WarmedData) =>
       val newData = s.decrementActive
 
-      context.parent ! NeedWork(newData)
-
-      if (newData.activeActivationCount > 0) {
+      //if there are items in runbuffer, process them if there is capacity, and stay; otherwise if we have any pending activations, also stay
+      if (requestWork(newData) || newData.activeActivationCount > 0) {
         stay using newData
       } else {
         goto(Ready) using newData
       }
-
+    case Event(r: Run, data: WarmedData)
+        if stateData.activeActivationCount >= data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if we are over concurrency limit, and not a failure on resume
+      runBuffer = runBuffer.enqueue(r)
+      stay()
     case Event(job: Run, data: WarmedData)
-        if stateData.activeActivationCount < data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if there was a delay, or a failure on resume, skip the run
+        if stateData.activeActivationCount < data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if there was a delay, and not a failure on resume, skip the run
 
       implicit val transid = job.msg.transid
       val newData = data.incrementActive
@@ -336,6 +339,24 @@ class ContainerProxy(
   }
 
   initialize()
+
+  /** Either process runbuffer or signal parent to send work; return true if runbuffer is being processed */
+  def requestWork(newData: WarmedData): Boolean = {
+    //if there is concurrency capacity, process runbuffer, or signal NeedWork
+    if (newData.activeActivationCount < newData.action.limits.concurrency.maxConcurrent) {
+      runBuffer.dequeueOption match {
+        case Some((run, q)) =>
+          runBuffer = q
+          self ! run
+          true
+        case _ =>
+          context.parent ! NeedWork(newData)
+          false
+      }
+    } else {
+      false
+    }
+  }
 
   /** Delays all incoming messages until unstashAll() is called */
   def delay = {
