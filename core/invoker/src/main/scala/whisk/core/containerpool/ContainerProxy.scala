@@ -284,6 +284,7 @@ class ContainerProxy(
     // Failed at getting a container for a cold-start run
     case Event(_: FailureMessage, _) =>
       context.parent ! ContainerRemoved
+      rejectBuffered()
       stop()
 
     case _ => delay
@@ -397,12 +398,7 @@ class ContainerProxy(
       context.parent ! RescheduleJob
     }
 
-    //resend any buffered items on container removal
-    if (runBuffer.nonEmpty) {
-      logging.info(this, s"resending ${runBuffer.size} buffered jobs to parent on container removal")
-      runBuffer.foreach(context.parent ! _)
-      runBuffer = immutable.Queue.empty[Run]
-    }
+    rejectBuffered()
 
     val unpause = stateName match {
       case Paused => container.resume()(TransactionId.invokerNanny)
@@ -415,6 +411,18 @@ class ContainerProxy(
       .pipeTo(self)
 
     goto(Removing)
+  }
+
+  /**
+   * Return any buffered jobs to parent, in case buffer is not empty at removal/error time.
+   */
+  def rejectBuffered() = {
+    //resend any buffered items on container removal
+    if (runBuffer.nonEmpty) {
+      logging.info(this, s"resending ${runBuffer.size} buffered jobs to parent on container removal")
+      runBuffer.foreach(context.parent ! _)
+      runBuffer = immutable.Queue.empty[Run]
+    }
   }
 
   /**

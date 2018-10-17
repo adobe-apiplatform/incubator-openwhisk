@@ -229,10 +229,19 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
 
     // Container got removed
     case ContainerRemoved =>
-      freePool = freePool - sender()
-      busyPool = busyPool - sender()
-      // container was busy, so there is capacity to accept another job request
-      feed ! MessageFeed.Processed
+      // if container was in free pool, it may have been processing (but under capacity),
+      // so there is capacity to accept another job request
+      freePool.get(sender()).foreach { f =>
+        freePool = freePool - sender()
+        if (f.activeActivationCount > 0) {
+          feed ! MessageFeed.Processed
+        }
+      }
+      // container was busy (busy indicates at full capacity), so there is capacity to accept another job request
+      busyPool.get(sender()).foreach { _ =>
+        busyPool = busyPool - sender()
+        feed ! MessageFeed.Processed
+      }
 
     // This message is received for one of these reasons:
     // 1. Container errored while resuming a warm container, could not process the job, and sent the job back
