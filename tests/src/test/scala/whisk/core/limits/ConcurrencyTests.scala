@@ -33,9 +33,9 @@ import spray.json.DefaultJsonProtocol._
 import spray.json.JsObject
 import spray.json._
 import whisk.core.ConfigKeys
+import whisk.core.containerpool.ContainerPoolConfig
 import whisk.core.entity.MemoryLimit
 import whisk.core.entity.size._
-import whisk.core.loadBalancer.ShardingContainerPoolBalancerConfig
 
 @RunWith(classOf[JUnitRunner])
 class ConcurrencyTests extends TestHelpers with WskTestHelpers with WskActorSystem {
@@ -76,7 +76,7 @@ class ConcurrencyTests extends TestHelpers with WskTestHelpers with WskActorSyst
 
       //read configs to determine max concurrency support - currently based on single invoker and invokerUserMemory config
       val busyThreshold =
-        (loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer).invokerUserMemory / MemoryLimit.stdMemory).toInt
+        (loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool).userMemory / MemoryLimit.stdMemory).toInt
 
       //run maximum allowed concurrent actions via Futures
       val requestCount = busyThreshold
@@ -123,7 +123,7 @@ class ConcurrencyTests extends TestHelpers with WskTestHelpers with WskActorSyst
 
       //read configs to determine max concurrency support - currently based on single invoker and invokerUserMemory config
       val busyThreshold =
-        (loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer).invokerUserMemory / MemoryLimit.stdMemory).toInt
+        (loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool).userMemory / MemoryLimit.stdMemory).toInt
 
       //run maximum allowed concurrent actions via Futures
       val requestCount = busyThreshold

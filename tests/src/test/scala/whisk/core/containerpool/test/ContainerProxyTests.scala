@@ -464,7 +464,14 @@ class ContainerProxyTests
     val machine =
       childActorOf(
         ContainerProxy
-          .props(factory, acker, store, collector, InvokerInstanceId(0), poolConfig, pauseGrace = pauseGrace))
+          .props(
+            factory,
+            acker,
+            store,
+            collector,
+            InvokerInstanceId(0, userMemory = defaultUserMemory),
+            poolConfig,
+            pauseGrace = pauseGrace))
     registerCallback(machine)
     preWarm(machine) //ends in Started state
 

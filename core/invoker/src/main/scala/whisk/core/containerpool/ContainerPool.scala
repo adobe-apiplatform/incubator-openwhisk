@@ -381,8 +381,7 @@ object ContainerPool {
   def props(factory: ActorRefFactory => ActorRef,
             poolConfig: ContainerPoolConfig,
             feed: ActorRef,
-            prewarmConfig: List[PrewarmingConfig] = List.empty,
-            maxConcurrent: Int = 1) =
+            prewarmConfig: List[PrewarmingConfig] = List.empty) =
     Props(new ContainerPool(factory, feed, prewarmConfig, poolConfig))
 }
 
