@@ -24,6 +24,7 @@ import akka.stream.scaladsl.Source
 import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.ByteString
 import common.{LoggedFunction, StreamLogging}
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
@@ -41,8 +42,6 @@ import whisk.core.database.UserContext
 
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future, Promise}
-import scala.util.Try
-//import scala.util.Try
 
 @RunWith(classOf[JUnitRunner])
 class ContainerProxyTests
@@ -146,6 +145,12 @@ class ContainerProxyTests
     val test = EntityName(namespace)
     expectMsgPF() {
       case a @ NeedWork(WarmedData(_, `test`, `action`, _, _)) if a.data.activeActivationCount == count => //matched, otherwise will fail
+    }
+  }
+  def expectAnyWarmed(namespace: String, action: ExecutableWhiskAction) = {
+    val test = EntityName(namespace)
+    expectMsgPF() {
+      case a @ NeedWork(WarmedData(_, `test`, `action`, _, _)) =>
     }
   }
 
@@ -472,17 +477,17 @@ class ContainerProxyTests
     expectMsg(Transition(machine, Started, Running))
 
     //complete the init
-    initPromise complete Try(initInterval)
+    initPromise.success(initInterval)
     expectWarmed(invocationNamespace.name, concurrentAction, 1) //when init completes
 
     //complete the first run
-    runPromises(0) complete Try(runInterval, ActivationResponse.success())
+    runPromises(0).success(runInterval, ActivationResponse.success())
     expectWarmed(invocationNamespace.name, concurrentAction, 0) //when first completes (count is 0 since stashed not counted)
     expectMsg(Transition(machine, Running, Ready)) //wait for first to complete to skip the delay step that can only reliably be tested in single threaded
     expectMsg(Transition(machine, Ready, Running)) //when second starts (after delay...)
 
     //complete the second run
-    runPromises(1) complete Try(runInterval, ActivationResponse.success())
+    runPromises(1).success(runInterval, ActivationResponse.success())
     expectWarmed(invocationNamespace.name, concurrentAction, 0) //when second completes
 
     //go back to ready after first and second runs are complete
@@ -497,17 +502,19 @@ class ContainerProxyTests
     expectMsg(Transition(machine, Ready, Running))
 
     //complete the third run (do not request new work yet)
-    runPromises(2) complete Try(runInterval, ActivationResponse.success())
+    runPromises(2).success(runInterval, ActivationResponse.success())
 
     //complete the fourth run -> dequeue the fifth run (do not request new work yet)
-    runPromises(3) complete Try(runInterval, ActivationResponse.success())
+    runPromises(3).success(runInterval, ActivationResponse.success())
 
     //complete the fifth run (request new work, 1 active remain)
-    runPromises(4) complete Try(runInterval, ActivationResponse.success())
+    runPromises(4).success(runInterval, ActivationResponse.success())
     expectWarmed(invocationNamespace.name, concurrentAction, 1) //when fifth completes
 
     //complete the sixth run (request new work 0 active remain)
-    runPromises(5) complete Try(runInterval, ActivationResponse.success())
+    runPromises(5).success(runInterval, ActivationResponse.success())
+
+    //expectWarmed(invocationNamespace.name, concurrentAction, 1) //when sixth completes
     expectWarmed(invocationNamespace.name, concurrentAction, 0) //when sixth completes
 
     // back to ready
@@ -544,7 +551,7 @@ class ContainerProxyTests
     val container = new TestContainer {
       override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
         implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
-        runCount += 1
+        atomicRunCount.incrementAndGet()
         //every other run fails
         if (runCount % 2 == 0) {
           Future.successful((runInterval, ActivationResponse.success()))
@@ -706,7 +713,7 @@ class ContainerProxyTests
     val container = new TestContainer {
       override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
         implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
-        runCount += 1
+        atomicRunCount.incrementAndGet()
         Future.successful((initInterval, ActivationResponse.developerError(("boom"))))
       }
     }
@@ -1037,9 +1044,10 @@ class ContainerProxyTests
     var resumeCount = 0
     var destroyCount = 0
     var initializeCount = 0
-    var runCount = 0
+    val atomicRunCount = new AtomicInteger(0) //need atomic tracking since we will test concurrent runs
     var logsCount = 0
 
+    def runCount = atomicRunCount.get()
     override def suspend()(implicit transid: TransactionId): Future[Unit] = {
       suspendCount += 1
       super.suspend()
@@ -1062,7 +1070,7 @@ class ContainerProxyTests
     }
     override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
       implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
-      runCount += 1
+      val runCount = atomicRunCount.incrementAndGet()
       environment.fields("namespace") shouldBe invocationNamespace.name.toJson
       environment.fields("action_name") shouldBe message.action.qualifiedNameWithLeadingSlash.toJson
       environment.fields("activation_id") shouldBe message.activationId.toJson

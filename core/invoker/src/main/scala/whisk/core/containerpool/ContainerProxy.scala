@@ -85,6 +85,9 @@ case class NeedWork(data: ContainerData)
 case object ContainerPaused
 case object ContainerRemoved // when container is destroyed
 case object RescheduleJob // job is sent back to parent and could not be processed because container is being destroyed
+case class PreWarmCompleted(data: PreWarmedData)
+case class InitCompleted(data: WarmedData)
+case object RunCompleted
 
 /**
  * A proxy that wraps a Container. It is used to keep track of the lifecycle
@@ -149,7 +152,7 @@ class ContainerProxy(
         job.exec.pull,
         job.memoryLimit,
         poolConfig.cpuShare(job.memoryLimit))
-        .map(container => PreWarmedData(container, job.exec.kind, job.memoryLimit))
+        .map(container => PreWarmCompleted(PreWarmedData(container, job.exec.kind, job.memoryLimit)))
         .pipeTo(self)
 
       goto(Starting)
@@ -175,7 +178,8 @@ class ContainerProxy(
           case Success(container) =>
             // the container is ready to accept an activation; register it as PreWarmed; this
             // normalizes the life cycle for containers and their cleanup when activations fail
-            self ! PreWarmedData(container, job.action.exec.kind, job.action.limits.memory.megabytes.MB, 1)
+            self ! PreWarmCompleted(
+              PreWarmedData(container, job.action.exec.kind, job.action.limits.memory.megabytes.MB, 1))
 
           case Failure(t) =>
             // the container did not come up cleanly, so disambiguate the failure mode and then cleanup
@@ -203,7 +207,7 @@ class ContainerProxy(
         .flatMap { container =>
           // now attempt to inject the user code and run the action
           initializeAndRun(container, job)
-            .map(_ => WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now))
+            .map(_ => RunCompleted)
         }
         .pipeTo(self)
 
@@ -212,9 +216,9 @@ class ContainerProxy(
 
   when(Starting) {
     // container was successfully obtained
-    case Event(data: PreWarmedData, _) =>
-      context.parent ! NeedWork(data)
-      goto(Started) using data
+    case Event(completed: PreWarmCompleted, _) =>
+      context.parent ! NeedWork(completed.data)
+      goto(Started) using completed.data
 
     // container creation failed
     case Event(_: FailureMessage, _) =>
@@ -228,7 +232,7 @@ class ContainerProxy(
     case Event(job: Run, data: PreWarmedData) =>
       implicit val transid = job.msg.transid
       initializeAndRun(data.container, job)
-        .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
+        .map(_ => RunCompleted)
         .pipeTo(self)
       goto(Running) using PreWarmedData(data.container, data.kind, data.memoryLimit, 1)
 
@@ -238,16 +242,16 @@ class ContainerProxy(
   when(Running) {
     // Intermediate state, we were able to start a container
     // and we keep it in case we need to destroy it.
-    case Event(data: PreWarmedData, _) => stay using data
+    case Event(completed: PreWarmCompleted, _) => stay using completed.data
 
     // Init was successful
-    case Event(data: WarmedData, _: PreWarmedData) =>
+    case Event(completed: InitCompleted, _: PreWarmedData) =>
       //in case concurrency supported, multiple runs can begin as soon as init is complete
-      context.parent ! NeedWork(data)
-      stay using data
+      context.parent ! NeedWork(completed.data)
+      stay using completed.data
 
     // Run was successful
-    case Event(_: WarmedData, s: WarmedData) =>
+    case Event(RunCompleted, s: WarmedData) =>
       val newData = s.decrementActive
 
       //if there are items in runbuffer, process them if there is capacity, and stay; otherwise if we have any pending activations, also stay
@@ -256,9 +260,9 @@ class ContainerProxy(
       } else {
         goto(Ready) using newData
       }
-    case Event(r: Run, data: WarmedData)
+    case Event(job: Run, data: WarmedData)
         if stateData.activeActivationCount >= data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if we are over concurrency limit, and not a failure on resume
-      runBuffer = runBuffer.enqueue(r)
+      runBuffer = runBuffer.enqueue(job)
       stay()
     case Event(job: Run, data: WarmedData)
         if stateData.activeActivationCount < data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if there was a delay, and not a failure on resume, skip the run
@@ -267,7 +271,7 @@ class ContainerProxy(
       val newData = data.incrementActive
 
       initializeAndRun(data.container, job)
-        .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
+        .map(_ => RunCompleted)
         .pipeTo(self)
       stay() using newData
 
@@ -291,7 +295,7 @@ class ContainerProxy(
       val newData = data.incrementActive
 
       initializeAndRun(data.container, job)
-        .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
+        .map(_ => RunCompleted)
         .pipeTo(self)
 
       goto(Running) using newData
@@ -326,7 +330,7 @@ class ContainerProxy(
             self ! job
         }
         .flatMap(_ => initializeAndRun(data.container, job))
-        .map(_ => WarmedData(data.container, job.msg.user.namespace.name, job.action, Instant.now))
+        .map(_ => RunCompleted)
         .pipeTo(self)
 
       goto(Running) using newData
@@ -436,7 +440,7 @@ class ContainerProxy(
       .flatMap { initInterval =>
         //immediately setup warmedData for use (before first execution) so that concurrent actions can use it asap
         if (initInterval.isDefined) {
-          self ! WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now, 1)
+          self ! InitCompleted(WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now, 1))
         }
         val parameters = job.msg.content getOrElse JsObject.empty
 
