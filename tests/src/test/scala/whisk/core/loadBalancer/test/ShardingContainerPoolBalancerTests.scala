@@ -416,7 +416,10 @@ class ShardingContainerPoolBalancerTests
     val messaging = stub[MessagingProvider]
     val producer = stub[MessageProducer]
     val consumer = stub[MessageConsumer]
-    (messaging.getProducer(_: WhiskConfig)(_: Logging, _: ActorSystem)).when(*, *, *).returns(producer)
+    (messaging
+      .getProducer(_: WhiskConfig, _: Option[ByteSize])(_: Logging, _: ActorSystem))
+      .when(*, *, *, *)
+      .returns(producer)
     (messaging
       .getConsumer(_: WhiskConfig, _: String, _: String, _: Int, _: FiniteDuration)(_: Logging, _: ActorSystem))
       .when(*, *, *, *, *, *, *)
