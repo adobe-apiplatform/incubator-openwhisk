@@ -42,6 +42,7 @@ protected[entity] class ConcurrencyLimit private (val maxConcurrent: Int) extend
 protected[core] object ConcurrencyLimit extends ArgNormalizer[ConcurrencyLimit] {
   private val concurrencyConfig = loadConfigOrThrow[ConcurrencyLimitConfig](ConfigKeys.concurrencyLimit)
 
+  println(s"concurrency config ${concurrencyConfig}")
   protected[core] val minConcurrent: Int = concurrencyConfig.min
   protected[core] val maxConcurrent: Int = concurrencyConfig.max
   protected[core] val stdConcurrent: Int = concurrencyConfig.std
