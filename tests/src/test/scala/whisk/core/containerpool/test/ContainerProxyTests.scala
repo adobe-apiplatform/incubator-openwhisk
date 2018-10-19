@@ -459,7 +459,11 @@ class ContainerProxyTests
     val factory = createFactory(Future.successful(container))
     val acker = createAcker(concurrentAction)
     val store = createStore
-    val collector = createCollector()
+    val collector =
+      (_: TransactionId, _: Identity, _: WhiskActivation, _: Container, _: ExecutableWhiskAction) => {
+        container.logs(0.MB, false)(TransactionId.testing)
+        Future.successful(ActivationLogs())
+      }
 
     val machine =
       childActorOf(
@@ -536,7 +540,7 @@ class ContainerProxyTests
       factory.calls should have size 1
       container.initializeCount shouldBe 1
       container.runCount shouldBe 6
-      collector.calls should have size 6
+      container.atomicLogsCount.get() shouldBe 6
       container.suspendCount shouldBe 1
       container.resumeCount shouldBe 0
       acker.calls should have size 6
@@ -1052,7 +1056,7 @@ class ContainerProxyTests
     var destroyCount = 0
     var initializeCount = 0
     val atomicRunCount = new AtomicInteger(0) //need atomic tracking since we will test concurrent runs
-    var logsCount = 0
+    var atomicLogsCount = new AtomicInteger(0)
 
     def runCount = atomicRunCount.get()
     override def suspend()(implicit transid: TransactionId): Future[Unit] = {
@@ -1096,6 +1100,9 @@ class ContainerProxyTests
         .map(_.future)
         .getOrElse(Future.successful((runInterval, ActivationResponse.success())))
     }
-    def logs(limit: ByteSize, waitForSentinel: Boolean)(implicit transid: TransactionId): Source[ByteString, Any] = ???
+    def logs(limit: ByteSize, waitForSentinel: Boolean)(implicit transid: TransactionId): Source[ByteString, Any] = {
+      atomicLogsCount.incrementAndGet()
+      Source.empty
+    }
   }
 }
