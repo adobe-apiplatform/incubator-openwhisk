@@ -17,10 +17,10 @@
 
 package whisk.core.entity
 
+import com.typesafe.config.ConfigFactory
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
-
 import spray.json._
 import whisk.core.ConfigKeys
 import pureconfig._
@@ -40,7 +40,10 @@ case class ConcurrencyLimitConfig(min: Int, max: Int, std: Int)
 protected[entity] class ConcurrencyLimit private (val maxConcurrent: Int) extends AnyVal
 
 protected[core] object ConcurrencyLimit extends ArgNormalizer[ConcurrencyLimit] {
-  private val concurrencyConfig = loadConfigOrThrow[ConcurrencyLimitConfig](ConfigKeys.concurrencyLimit)
+  //since tests require override to the default config, load the "test" config, with fallbacks to default
+  val config = ConfigFactory.load().getConfig("test")
+  private val concurrencyConfig =
+    loadConfigWithFallbackOrThrow[ConcurrencyLimitConfig](config, ConfigKeys.concurrencyLimit)
 
   protected[core] val minConcurrent: Int = concurrencyConfig.min
   protected[core] val maxConcurrent: Int = concurrencyConfig.max
