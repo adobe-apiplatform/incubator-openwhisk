@@ -345,11 +345,8 @@ class ShardingContainerPoolBalancerTests
     // Each invoker has 2 slots, each action has concurrency 3
     val slots = 2
     val invokerSlots = semaphores(invokerCount, slots)
-//    val concurrentSlots = TrieMap.empty[InvokerInstanceId, ResizableSemaphore]
     val concurrency = 3
     val invokers = (0 until invokerCount).map(i => healthy(i))
-
-    //val containersPer = 2
 
     (0 until invokerCount).foreach { i =>
       (1 to slots).foreach { s =>
@@ -358,7 +355,6 @@ class ShardingContainerPoolBalancerTests
             .schedule(concurrency, fqn, invokers, invokerSlots, 1, 0, 1)
             .get
             .toInt shouldBe i
-          //concurrentSlots.get(InvokerInstanceId(i)).get.availablePermits shouldBe concurrency - c
           invokerSlots
             .lift(i)
             .get
@@ -367,17 +363,7 @@ class ShardingContainerPoolBalancerTests
         }
       }
     }
-//    println("-------")
-//    //forced to a random invoker
-//    val random = ShardingContainerPoolBalancer
-//      .schedule(concurrency, fqn, invokers, invokerSlots, 1, 0, 1)
-//    //concurrentSlots.get(random.get).get.availablePermits shouldBe concurrency - 1
-//
-//    invokerSlots
-//      .lift(random.get.toInt)
-//      .get
-//      .concurrentState(fqn)
-//      .availablePermits shouldBe concurrency - 1
+
   }
 
   implicit val am = ActorMaterializer()
@@ -457,7 +443,7 @@ class ShardingContainerPoolBalancerTests
         mockMessaging)
 
     val invokers = IndexedSeq.tabulate(numInvokers) { i =>
-      new InvokerHealth(InvokerInstanceId(i, userMemory = defaultUserMemory), Healthy)
+      new InvokerHealth(InvokerInstanceId(i, userMemory = invokerMem), Healthy)
     }
     balancer.schedulingState.updateInvokers(invokers)
     val invocationNamespace = EntityName("invocationSpace")
