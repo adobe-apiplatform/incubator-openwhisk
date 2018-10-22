@@ -23,6 +23,7 @@ import akka.actor.{ActorRef, ActorSystem, FSM}
 import akka.stream.scaladsl.Source
 import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.ByteString
+import common.SynchronizedLoggedFunction
 import common.{LoggedFunction, StreamLogging}
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.runner.RunWith
@@ -169,6 +170,15 @@ class ContainerProxyTests
       Future.successful(())
   }
 
+  /** Creates an synchronized inspectable version of the ack method, which records all calls in a buffer */
+  def createSyncAcker(a: ExecutableWhiskAction = action) = SynchronizedLoggedFunction {
+    (_: TransactionId, activation: WhiskActivation, _: Boolean, _: ControllerInstanceId, _: UUID) =>
+      activation.annotations.get("limits") shouldBe Some(a.limits.toJson)
+      activation.annotations.get("path") shouldBe Some(a.fullyQualifiedName(false).toString.toJson)
+      activation.annotations.get("kind") shouldBe Some(a.exec.kind.toJson)
+      Future.successful(())
+  }
+
   /** Creates an inspectable factory */
   def createFactory(response: Future[Container]) = LoggedFunction {
     (_: TransactionId, _: String, _: ImageName, _: Boolean, _: ByteSize, _: Int) =>
@@ -188,7 +198,10 @@ class ContainerProxyTests
   def createStore = LoggedFunction { (transid: TransactionId, activation: WhiskActivation, context: UserContext) =>
     Future.successful(())
   }
-
+  def createSyncStore = SynchronizedLoggedFunction {
+    (transid: TransactionId, activation: WhiskActivation, context: UserContext) =>
+      Future.successful(())
+  }
   val poolConfig = ContainerPoolConfig(2.MB, 0.5, false)
 
   behavior of "ContainerProxy"
@@ -457,8 +470,8 @@ class ContainerProxyTests
       Promise[(Interval, ActivationResponse)]())
     val container = new TestContainer(Some(initPromise), runPromises)
     val factory = createFactory(Future.successful(container))
-    val acker = createAcker(concurrentAction)
-    val store = createStore
+    val acker = createSyncAcker(concurrentAction)
+    val store = createSyncStore
     val collector =
       (_: TransactionId, _: Identity, _: WhiskActivation, _: Container, _: ExecutableWhiskAction) => {
         container.logs(0.MB, false)(TransactionId.testing)
