@@ -156,9 +156,10 @@ trait WhiskActivationsApi extends Directives with AuthenticatedRouteProvider wit
       'limit.as[ListLimit] ? ListLimit(collection.defaultListLimit),
       'count ? false,
       'docs ? false,
+      'logs ? false,
       'name.as[Option[EntityPath]] ?,
       'since.as[Instant] ?,
-      'upto.as[Instant] ?) { (skip, limit, count, docs, name, since, upto) =>
+      'upto.as[Instant] ?) { (skip, limit, count, docs, logs, name, since, upto) =>
       if (count && !docs) {
         countEntities {
           activationStore.countActivationsInNamespace(namespace, name.flatten, skip.n, since, upto, context)
@@ -172,7 +173,16 @@ trait WhiskActivationsApi extends Directives with AuthenticatedRouteProvider wit
           case None =>
             activationStore.listActivationsInNamespace(namespace, skip.n, limit.n, docs, since, upto, context)
         }
-        listEntities(activations map (_.fold((js) => js, (wa) => wa.map(_.toExtendedJson))))
+        //in case we want to display logs with the activation list, collect the logs from logStore
+        val activationsWithLogs = if (logs) {
+          activations flatMap (_.fold((js) => Future.successful(Left(js)), (wa) => {
+            val a = wa.map { a =>
+              logStore.fetchLogs(a, context).map(a.withLogs)
+            }
+            Future.sequence(a).map(Right(_))
+          }))
+        } else { activations }
+        listEntities(activationsWithLogs map (_.fold((js) => js, (wa) => wa.map(_.toExtendedJson))))
       }
     }
   }
