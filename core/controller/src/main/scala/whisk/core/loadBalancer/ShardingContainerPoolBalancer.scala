@@ -135,9 +135,17 @@ import scala.util.{Failure, Success}
  * has at most 16 slots available (invoker-busy-threshold = 16), those will be divided to 8 slots for each loadbalancer
  * (if there are 2).
  *
+ * If concurrent activation processing is enabled (and concurrency limit is > 1), accounting of containers and
+ * concurrency capacity per container will limit the number of concurrent activations routed to the particular
+ * slot at an invoker. Default max concurrency is 1.
+ *
  * Known caveats:
  * - If a loadbalancer leaves or joins the cluster, all state is removed and created from scratch. Those events should
  *   not happen often.
+ * - If concurrent activation processing is enabled, it only accounts for the containers that the current loadbalancer knows.
+ *   So the actual number of containers launched at the invoker may be less than is counted at the loadbalancer, since
+ *   the invoker may skip container launch in case there is concurrent capacity available for a container launched via
+ *   some other loadbalancer.
  */
 class ShardingContainerPoolBalancer(
   config: WhiskConfig,
