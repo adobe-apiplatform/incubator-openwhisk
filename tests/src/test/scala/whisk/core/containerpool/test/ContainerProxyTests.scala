@@ -172,7 +172,7 @@ class ContainerProxyTests
 
   /** Creates an synchronized inspectable version of the ack method, which records all calls in a buffer */
   def createSyncAcker(a: ExecutableWhiskAction = action) = SynchronizedLoggedFunction {
-    (_: TransactionId, activation: WhiskActivation, _: Boolean, _: ControllerInstanceId, _: UUID) =>
+    (_: TransactionId, activation: WhiskActivation, _: Boolean, _: ControllerInstanceId, _: UUID, _: Boolean) =>
       activation.annotations.get("limits") shouldBe Some(a.limits.toJson)
       activation.annotations.get("path") shouldBe Some(a.fullyQualifiedName(false).toString.toJson)
       activation.annotations.get("kind") shouldBe Some(a.exec.kind.toJson)

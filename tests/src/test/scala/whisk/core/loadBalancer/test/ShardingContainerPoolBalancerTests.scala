@@ -24,7 +24,6 @@ import akka.stream.ActorMaterializer
 import akka.testkit.TestProbe
 import common.StreamLogging
 import java.nio.charset.StandardCharsets
-import java.time.Instant
 import org.apache.kafka.clients.producer.RecordMetadata
 import org.apache.kafka.common.TopicPartition
 import org.junit.runner.RunWith
@@ -35,8 +34,6 @@ import org.scalatest.Matchers
 import scala.concurrent.Await
 import scala.concurrent.Future
 import scala.concurrent.duration._
-import spray.json.JsNumber
-import spray.json.JsObject
 import whisk.common.Logging
 import whisk.common.NestedSemaphore
 import whisk.core.entity.FullyQualifiedEntityName
@@ -49,24 +46,23 @@ import whisk.core.connector.MessageConsumer
 import whisk.core.connector.MessageProducer
 import whisk.core.connector.MessagingProvider
 import whisk.core.entity.ActivationId
-import whisk.core.entity.ActivationResponse
 import whisk.core.entity.BasicAuthenticationAuthKey
 import whisk.core.entity.ControllerInstanceId
 import whisk.core.entity.EntityName
 import whisk.core.entity.EntityPath
 import whisk.core.entity.ExecManifest
 import whisk.core.entity.Identity
+import whisk.core.entity.InvokerInstanceId
+import whisk.core.entity.MemoryLimit
 import whisk.core.entity.Namespace
 import whisk.core.entity.Secret
 import whisk.core.entity.Subject
 import whisk.core.entity.UUID
 import whisk.core.entity.WhiskActionMetaData
-import whisk.core.entity.WhiskActivation
 import whisk.core.entity.test.ExecHelpers
 import whisk.core.entity.ByteSize
 import whisk.core.entity.size._
-import whisk.core.entity.InvokerInstanceId
-import whisk.core.entity.MemoryLimit
+import whisk.core.entity.test.ExecHelpers
 import whisk.core.loadBalancer.InvokerState._
 import whisk.core.loadBalancer._
 
@@ -532,17 +528,8 @@ class ShardingContainerPoolBalancerTests
 
   def completeActivation(invoker: InvokerInstanceId, balancer: ShardingContainerPoolBalancer, aid: ActivationId) = {
     //complete activation
-    val activation = WhiskActivation(
-      namespace = EntityPath("ns"),
-      name = EntityName("a"),
-      Subject(),
-      activationId = aid,
-      start = Instant.now(),
-      end = Instant.now(),
-      response = ActivationResponse.success(Some(JsObject("res" -> JsNumber(1)))),
-      duration = Some(123))
-    val ack = CompletionMessage(TransactionId.testing, Right(activation), invoker).serialize
+    val ack = CompletionMessage(TransactionId.testing, aid, false, invoker).serialize
       .getBytes(StandardCharsets.UTF_8)
-    balancer.processActiveAck(ack)
+    balancer.processAcknowledgement(ack)
   }
 }
