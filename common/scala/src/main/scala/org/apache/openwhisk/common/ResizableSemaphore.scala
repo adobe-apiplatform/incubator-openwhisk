@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package whisk.common
+package org.apache.openwhisk.common
 
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.AbstractQueuedSynchronizer

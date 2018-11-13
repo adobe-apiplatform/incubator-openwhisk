@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 
-package whisk.core.entity
+package org.apache.openwhisk.core.entity
 
 import com.typesafe.config.ConfigFactory
+import org.apache.openwhisk.core.ConfigKeys
+import pureconfig._
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 import spray.json._
-import whisk.core.ConfigKeys
-import pureconfig._
 
 case class ConcurrencyLimitConfig(min: Int, max: Int, std: Int)
 

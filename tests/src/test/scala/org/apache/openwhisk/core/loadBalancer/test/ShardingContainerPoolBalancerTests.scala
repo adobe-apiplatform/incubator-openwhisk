@@ -63,8 +63,10 @@ import org.apache.openwhisk.core.entity.test.ExecHelpers
 import org.apache.openwhisk.core.entity.ByteSize
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.entity.test.ExecHelpers
+import org.apache.openwhisk.core.loadBalancer.FeedFactory
+import org.apache.openwhisk.core.loadBalancer.InvokerPoolFactory
 import org.apache.openwhisk.core.loadBalancer.InvokerState._
-import whisk.core.loadBalancer._
+import org.apache.openwhisk.core.loadBalancer._
 
 /**
  * Unit tests for the ContainerPool object.

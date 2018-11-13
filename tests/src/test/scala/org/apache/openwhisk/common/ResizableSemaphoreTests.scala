@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package whisk.common
+package org.apache.openwhisk.common
 
 import org.junit.runner.RunWith
-import org.scalatest.junit.JUnitRunner
 import org.scalatest.FlatSpec
 import org.scalatest.Matchers
+import org.scalatest.junit.JUnitRunner
 
 @RunWith(classOf[JUnitRunner])
 class ResizableSemaphoreTests extends FlatSpec with Matchers {

@@ -35,13 +35,13 @@ import common.rest.WskRestOperations
 import common.WskProps
 import common.WskTestHelpers
 import common.WskActorSystem
-
 import spray.json._
 import spray.json.DefaultJsonProtocol._
 import org.apache.openwhisk.core.entity.{
   ActivationEntityLimit,
   ActivationResponse,
   ByteSize,
+  ConcurrencyLimit,
   Exec,
   LogLimit,
   MemoryLimit,

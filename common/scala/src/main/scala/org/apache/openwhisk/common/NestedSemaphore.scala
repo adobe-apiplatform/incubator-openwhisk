@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package whisk.common
+package org.apache.openwhisk.common
 
 import scala.collection.concurrent.TrieMap
 

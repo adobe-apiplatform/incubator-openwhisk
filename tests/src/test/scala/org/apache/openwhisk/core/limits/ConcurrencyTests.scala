@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package whisk.core.limits
+package org.apache.openwhisk.core.limits
 
 import common.TestHelpers
 import common.TestUtils
@@ -23,6 +23,10 @@ import common.WskActorSystem
 import common.WskProps
 import common.WskTestHelpers
 import common.rest.WskRestOperations
+import org.apache.openwhisk.core.ConfigKeys
+import org.apache.openwhisk.core.containerpool.ContainerPoolConfig
+import org.apache.openwhisk.core.entity.MemoryLimit
+import org.apache.openwhisk.core.entity.size._
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import pureconfig.loadConfigOrThrow
@@ -32,10 +36,6 @@ import scala.concurrent.duration.DurationInt
 import spray.json.DefaultJsonProtocol._
 import spray.json.JsObject
 import spray.json._
-import whisk.core.ConfigKeys
-import whisk.core.containerpool.ContainerPoolConfig
-import whisk.core.entity.MemoryLimit
-import whisk.core.entity.size._
 
 @RunWith(classOf[JUnitRunner])
 class ConcurrencyTests extends TestHelpers with WskTestHelpers with WskActorSystem {
