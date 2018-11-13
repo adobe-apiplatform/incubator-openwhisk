@@ -36,7 +36,7 @@ whisk:
     date: "{{ansible_date_time.iso8601}}"
 
 ##
-# configuration parameters related to support runtimes (see whisk.core.entity.ExecManifest for schema of the manifest).
+# configuration parameters related to support runtimes (see org.apache.openwhisk.core.entity.ExecManifest for schema of the manifest).
 # briefly the parameters are:
 #
 #   runtimes_registry: optional registry (with trailing slack) where to pull docker images from for runtimes and backbox images
@@ -48,7 +48,9 @@ whisk:
 #   runtimes_bypass_pull_for_local_images: optional, if true, allow images with a prefix that matches
 #       {{ runtimes_local_image_prefix }} to skip docker pull in invoker even if the image is not part of the blackbox set
 #
-runtimesManifest: "{{ runtimes_manifest | default(lookup('file', openwhisk_home ~ '/ansible/files/runtimes.json') | from_json) }}"
+
+manifestfile: "{{ manifest_file | default('/ansible/files/runtimes.json') }}"
+runtimesManifest: "{{ runtimes_manifest | default(lookup('file', openwhisk_home ~ '{{ manifestfile }}') | from_json) }}"
 
 limits:
   invocationsPerMinute: "{{ limit_invocations_per_minute | default(60) }}"
@@ -170,7 +172,7 @@ invoker:
   port: 12001
   heap: "{{ invoker_heap | default('2g') }}"
   arguments: "{{ invoker_arguments | default('') }}"
-  userMemory: "{{ invoker_user_memory | default('1024 m') }}"
+  userMemory: "{{ invoker_user_memory | default('2048 m') }}"
   instances: "{{ groups['invokers'] | length }}"
   # Specify if it is allowed to deploy more than 1 invoker on a single machine.
   allowMultipleInstances: "{{ invoker_allow_multiple_instances | default(false) }}"
@@ -197,7 +199,7 @@ invoker:
       name: "{{ __invoker_ssl_keyPrefix }}openwhisk-keystore.p12"
 
 userLogs:
-  spi: "{{ userLogs_spi | default('whisk.core.containerpool.logging.DockerToActivationLogStoreProvider') }}"
+  spi: "{{ userLogs_spi | default('org.apache.openwhisk.core.containerpool.logging.DockerToActivationLogStoreProvider') }}"
 
 nginx:
   confdir: "{{ config_root_dir }}/nginx"
@@ -259,7 +261,7 @@ apigateway:
   version: 0.9.10
 
 redis:
-  version: 3.2
+  version: 4.0
   port: 6379
 
 linux:

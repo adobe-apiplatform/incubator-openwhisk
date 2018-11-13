@@ -54,31 +54,41 @@ def leanExcludes = [
 ext.testSets = [
     "REQUIRE_ONLY_DB" : [
         "includes" : [
-            "whisk/**"
+            "org/apache/openwhisk/**"
         ],
         "excludes" : [
-            "whisk/core/admin/**",
-            "whisk/core/apigw/actions/test/**",
-            "whisk/core/cli/test/**",
-            "whisk/core/limits/**",
+            "org/apache/openwhisk/core/admin/**",
+            "org/apache/openwhisk/core/apigw/actions/test/**",
+            "org/apache/openwhisk/core/cli/test/**",
+            "org/apache/openwhisk/core/limits/**",
             "**/*CacheConcurrencyTests*",
             "**/*ControllerApiTests*",
+            "org/apache/openwhisk/testEntities/**",
         ]
     ],
     "REQUIRE_SYSTEM" : [
         "includes" : [
+            "org/apache/openwhisk/core/limits/**",
+            "org/apache/openwhisk/core/admin/**",
+            "org/apache/openwhisk/core/cli/test/**",
+            "org/apache/openwhisk/core/apigw/actions/test/**",
+            "org/apache/openwhisk/core/database/test/*CacheConcurrencyTests*",
+            "org/apache/openwhisk/core/controller/test/*ControllerApiTests*",
             "apigw/healthtests/**",
             "ha/**",
-            "limits/**",
             "services/**",
             "system/basic/**",
             "system/rest/**",
-            "whisk/core/admin/**",
-            "whisk/core/cli/test/**",
-            "whisk/core/apigw/actions/test/**",
-            "whisk/core/limits/**",
-            "whisk/core/database/test/*CacheConcurrencyTests*",
-            "whisk/core/controller/test/*ControllerApiTests*",
+        ],
+        "excludes": [
+            "system/basic/WskMultiRuntimeTests*"
+        ]
+    ],
+    "REQUIRE_MULTI_RUNTIME" : [
+        "includes" : [
+            "system/basic/*MultiRuntimeTests*",
+            "system/basic/*UnicodeTests*",
+            "limits/**"
         ]
     ],
     "LEAN" : [
@@ -86,7 +96,7 @@ ext.testSets = [
     ],
     "REQUIRE_SYSTEM_BASIC" : [
         "includes" : [
-            "system/basic/**"
+            "org/apache/openwhisk/testEntities/system/basic/**"
         ]
     ]
 ]
@@ -128,7 +138,7 @@ task testSystemBasic(type: Test) {
 }
 
 task testUnit(type: Test) {
-    systemProperty("whisk.spi.ArtifactStoreProvider", "whisk.core.database.memory.MemoryArtifactStoreProvider")
+    systemProperty("whisk.spi.ArtifactStoreProvider", "org.apache.openwhisk.core.database.memory.MemoryArtifactStoreProvider")
     exclude getPattern("REQUIRE_ONLY_DB", "excludes")
     include getPattern("REQUIRE_ONLY_DB", "includes")
 
@@ -152,11 +162,11 @@ dependencies {
     compile 'org.apache.httpcomponents:httpmime:4.3.6'
     compile 'junit:junit:4.11'
     compile 'com.jayway.restassured:rest-assured:2.6.0'
-    compile 'org.scalatest:scalatest_2.11:3.0.1'
-    compile 'com.typesafe.akka:akka-testkit_2.11:2.5.12'
+    compile 'org.scalatest:scalatest_2.12:3.0.1'
+    compile 'com.typesafe.akka:akka-testkit_2.12:2.5.12'
     compile 'com.google.code.gson:gson:2.3.1'
-    compile 'org.scalamock:scalamock-scalatest-support_2.11:3.4.2'
-    compile 'com.typesafe.akka:akka-http-testkit_2.11:10.1.1'
+    compile 'org.scalamock:scalamock-scalatest-support_2.12:3.4.2'
+    compile 'com.typesafe.akka:akka-http-testkit_2.12:10.1.1'
     compile 'com.github.java-json-tools:json-schema-validator:2.2.8'
     compile "org.mockito:mockito-core:2.15.0"
     compile 'io.opentracing:opentracing-mock:0.31.0'
