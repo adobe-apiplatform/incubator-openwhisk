@@ -17,28 +17,31 @@
 
 package org.apache.openwhisk.core.containerpool.docker
 
+import akka.actor.ActorSystem
+import akka.stream._
+import akka.stream.scaladsl.Framing
+import akka.stream.scaladsl.Framing.FramingException
+import akka.stream.scaladsl.Source
+import akka.stream.stage._
+import akka.util.ByteString
 import java.time.Instant
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
-import akka.actor.ActorSystem
-import akka.stream._
-import akka.stream.scaladsl.Framing.FramingException
-import spray.json._
-import scala.concurrent.{ExecutionContext, Future}
-import scala.concurrent.duration._
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool._
-import org.apache.openwhisk.core.entity.ActivationResponse.{ConnectionError, MemoryExhausted}
-import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ByteSize}
-import org.apache.openwhisk.core.entity.size._
-import akka.stream.scaladsl.{Framing, Source}
-import akka.stream.stage._
-import akka.util.ByteString
-import spray.json._
 import org.apache.openwhisk.core.containerpool.logging.LogLine
+import org.apache.openwhisk.core.entity.ActivationEntityLimit
+import org.apache.openwhisk.core.entity.ActivationResponse.ConnectionError
+import org.apache.openwhisk.core.entity.ActivationResponse.MemoryExhausted
+import org.apache.openwhisk.core.entity.ByteSize
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
+import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.concurrent.duration._
+import spray.json._
 
 object DockerContainer {
 
@@ -208,7 +211,8 @@ class DockerContainer(protected val id: ContainerId,
     val started = Instant.now()
     val http = httpConnection.getOrElse {
       val conn = if (Container.config.akkaClient) {
-        new AkkaContainerClient(addr.host, addr.port, timeout, ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT, 1024)
+        logging.info(this, "creating sttp http conn")
+        new SttpContainerClient(addr.host, addr.port, timeout, ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT)
       } else {
         new ApacheBlockingContainerClient(
           s"${addr.host}:${addr.port}",

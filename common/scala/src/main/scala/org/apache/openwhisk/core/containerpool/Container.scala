@@ -17,25 +17,31 @@
 
 package org.apache.openwhisk.core.containerpool
 
-import java.time.Instant
-
 import akka.actor.ActorSystem
 import akka.event.Logging.InfoLevel
 import akka.stream.scaladsl.Source
 import akka.util.ByteString
+import java.time.Instant
+import org.apache.openwhisk.common.Logging
+import org.apache.openwhisk.common.LoggingMarkers
+import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.ConfigKeys
+import org.apache.openwhisk.core.entity.ActivationEntityLimit
+import org.apache.openwhisk.core.entity.ActivationResponse
+import org.apache.openwhisk.core.entity.ActivationResponse.ContainerConnectionError
+import org.apache.openwhisk.core.entity.ActivationResponse.ContainerResponse
+import org.apache.openwhisk.core.entity.ByteSize
+import org.apache.openwhisk.http.Messages
 import pureconfig._
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.concurrent.duration.Duration
+import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration._
+import scala.util.Failure
+import scala.util.Success
 import spray.json.DefaultJsonProtocol._
 import spray.json.JsObject
-import org.apache.openwhisk.common.{Logging, LoggingMarkers, TransactionId}
-import org.apache.openwhisk.core.ConfigKeys
-import org.apache.openwhisk.core.entity.ActivationResponse.{ContainerConnectionError, ContainerResponse}
-import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ActivationResponse, ByteSize}
-import org.apache.openwhisk.core.entity.size._
-import org.apache.openwhisk.http.Messages
-
-import scala.concurrent.{ExecutionContext, Future}
-import scala.concurrent.duration.{Duration, FiniteDuration, _}
-import scala.util.{Failure, Success}
 
 /**
  * An OpenWhisk biased container abstraction. This is **not only** an abstraction
@@ -77,9 +83,10 @@ trait Container {
   def suspend()(implicit transid: TransactionId): Future[Unit] = {
     //close connection first, then close connection pool
     //(testing pool recreation vs connection closing, time was similar - so using the simpler recreation approach)
-    val toClose = httpConnection
-    httpConnection = None
-    closeConnections(toClose)
+//    val toClose = httpConnection
+//    httpConnection = None
+//    closeConnections(toClose)
+    Future.successful({})
   }
 
   /** Dual of halt. */
@@ -186,7 +193,8 @@ trait Container {
     val started = Instant.now()
     val http = httpConnection.getOrElse {
       val conn = if (Container.config.akkaClient) {
-        new AkkaContainerClient(addr.host, addr.port, timeout, ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT, 1024)
+        logging.info(this, "creating sttp http conn")
+        new SttpContainerClient(addr.host, addr.port, timeout, ActivationEntityLimit.MAX_ACTIVATION_ENTITY_LIMIT)
       } else {
         new ApacheBlockingContainerClient(
           s"${addr.host}:${addr.port}",
