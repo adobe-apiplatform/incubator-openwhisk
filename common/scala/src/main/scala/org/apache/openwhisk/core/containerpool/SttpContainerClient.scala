@@ -19,6 +19,7 @@ package org.apache.openwhisk.core.containerpool
 import akka.actor.ActorSystem
 import com.softwaremill.sttp._
 import com.softwaremill.sttp.asynchttpclient.future.AsyncHttpClientFutureBackend
+import java.io.IOException
 import java.net.ConnectException
 import java.nio.charset.StandardCharsets
 import org.apache.openwhisk.common.Logging
@@ -73,6 +74,7 @@ protected class SttpContainerClient(
     .setConnectTimeout(1000) //default 5000
     .setRequestTimeout(100) //default 60000
     .setPooledConnectionIdleTimeout(60000) //default 60000
+    .setMaxRequestRetry(0) //default 5
     //.setIoThreadsCount()
     .build()
 
@@ -158,17 +160,16 @@ class RetryingBackend[R[_], S](delegate: SttpBackend[Future, Nothing],
                                timeout: FiniteDuration,
                                retryInterval: FiniteDuration)(implicit as: ActorSystem, ec: ExecutionContext)
     extends SttpBackend[Future, Nothing] {
-  def shouldRetry(request: Request[_, _], r: Either[Throwable, Response[_]], newTimeout: FiniteDuration): Boolean = {
-
-    r match {
-      case Left(_: TimeoutException) =>
-        false //requestTimeout/readTimeout already elapsed
-      case Left(_: ConnectException) => //java.net.ConnectException is thrown immediately, allow retries if within the limit
+  def shouldRetry(t: Throwable, newTimeout: FiniteDuration): Boolean = {
+    t match {
+      case t: TimeoutException =>
+        false //TimeoutException is thrown later - requestTimeout/readTimeout already elapsed
+      case _: ConnectException |
+          _: IOException => //java.net.ConnectException/java.io.IOException are thrown immediately, allow retries if within the limit
         newTimeout > Duration.Zero
       case _ =>
         false
     }
-
   }
 
   override def send[T](r: Request[T, Nothing]): Future[Response[T]] = {
@@ -179,7 +180,7 @@ class RetryingBackend[R[_], S](delegate: SttpBackend[Future, Nothing],
                                retries: Int): Future[Response[T]] = {
     val newTimeout = timeout - retryInterval
     val r = responseMonad.handleError(delegate.send(request)) {
-      case t if shouldRetry(request, Left(t), newTimeout) =>
+      case t if shouldRetry(t, newTimeout) =>
         akka.pattern.after(retryInterval, as.scheduler) {
           sendWithRetry(request, newTimeout, retries + 1)
         }
@@ -187,6 +188,7 @@ class RetryingBackend[R[_], S](delegate: SttpBackend[Future, Nothing],
         Future.failed(new TimeoutException(t.getMessage))
     }
     responseMonad.flatMap(r) { resp =>
+      as.log.debug(s"returning after ${retries} retries")
       responseMonad.unit(resp)
     }
   }
