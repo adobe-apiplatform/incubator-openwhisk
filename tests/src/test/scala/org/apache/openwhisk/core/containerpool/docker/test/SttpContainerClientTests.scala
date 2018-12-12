@@ -108,7 +108,7 @@ class SttpContainerClientTests
 
   it should "not wait longer than set timeout" in {
     val timeout = 5.seconds
-    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout, 1.B, 100)
+    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout, 1.B)
     testHang = timeout * 2
     val start = Instant.now()
     val result = Await.result(connection.post("/init", JsObject.empty, retry = true), 10.seconds)
@@ -122,7 +122,7 @@ class SttpContainerClientTests
 
   it should "handle empty entity response" in {
     val timeout = 5.seconds
-    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout, 1.B, 100)
+    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout, 1.B)
     testStatusCode = 204
     val result = Await.result(connection.post("/init", JsObject.empty, retry = true), 10.seconds)
     result shouldBe Left(NoResponseReceived())
@@ -130,7 +130,7 @@ class SttpContainerClientTests
 
   it should "retry till timeout on StreamTcpException" in {
     val timeout = 5.seconds
-    val connection = new SttpContainerClient("0.0.0.0", 12345, timeout, 1.B, 100)
+    val connection = new SttpContainerClient("0.0.0.0", 12345, timeout, 1.B)
     val start = Instant.now()
     val result = Await.result(connection.post("/init", JsObject.empty, retry = true), 10.seconds)
     val end = Instant.now()
@@ -147,7 +147,7 @@ class SttpContainerClientTests
     val timeout = 5.seconds
     val retryInterval = 500.milliseconds
     val connection =
-      new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout, 1.B, 100, retryInterval)
+      new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout, 1.B, retryInterval)
     val start = Instant.now()
     testConnectionFailCount = 5
     testResponse = ""
@@ -164,7 +164,7 @@ class SttpContainerClientTests
 
   it should "not truncate responses within limit" in {
     val timeout = 1.minute.toMillis
-    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout.millis, 50.B, 100)
+    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout.millis, 50.B)
     Seq(true, false).foreach { success =>
       Seq(null, "", "abc", """{"a":"B"}""", """["a", "b"]""").foreach { r =>
         testStatusCode = if (success) 200 else 500
@@ -181,7 +181,7 @@ class SttpContainerClientTests
   it should "truncate responses that exceed limit" in {
     val timeout = 1.minute.toMillis
     val limit = 1.B
-    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout.millis, limit, 100)
+    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout.millis, limit)
     Seq(true, false).foreach { success =>
       Seq("abc", """{"a":"B"}""", """["a", "b"]""").foreach { r =>
         testStatusCode = if (success) 200 else 500
@@ -199,7 +199,7 @@ class SttpContainerClientTests
     //use a limit large enough to not fit into a single ByteString as response entity is parsed into multiple ByteStrings
     //seems like this varies, but often is ~64k or ~128k
     val limit = 300.KB
-    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout.millis, limit, 100)
+    val connection = new SttpContainerClient(httpHost.getHostName, httpHost.getPort, timeout.millis, limit)
     Seq(true, false).foreach { success =>
       // Generate a response that's 1MB
       val response = "0" * 1024 * 1024
