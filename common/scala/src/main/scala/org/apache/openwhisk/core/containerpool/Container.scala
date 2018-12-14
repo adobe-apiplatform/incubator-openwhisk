@@ -31,6 +31,7 @@ import org.apache.openwhisk.core.entity.ActivationResponse
 import org.apache.openwhisk.core.entity.ActivationResponse.ContainerConnectionError
 import org.apache.openwhisk.core.entity.ActivationResponse.ContainerResponse
 import org.apache.openwhisk.core.entity.ByteSize
+import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
 import pureconfig._
 import scala.concurrent.ExecutionContext
@@ -83,10 +84,9 @@ trait Container {
   def suspend()(implicit transid: TransactionId): Future[Unit] = {
     //close connection first, then close connection pool
     //(testing pool recreation vs connection closing, time was similar - so using the simpler recreation approach)
-//    val toClose = httpConnection
-//    httpConnection = None
-//    closeConnections(toClose)
-    Future.successful({})
+    val toClose = httpConnection
+    httpConnection = None
+    closeConnections(toClose)
   }
 
   /** Dual of halt. */

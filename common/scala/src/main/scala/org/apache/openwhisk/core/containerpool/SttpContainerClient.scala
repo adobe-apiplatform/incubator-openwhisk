@@ -19,6 +19,8 @@ package org.apache.openwhisk.core.containerpool
 import akka.actor.ActorSystem
 import com.softwaremill.sttp._
 import com.softwaremill.sttp.asynchttpclient.future.AsyncHttpClientFutureBackend
+import io.netty.util.NettyRuntime
+import io.netty.util.internal.SystemPropertyUtil
 import java.io.IOException
 import java.net.ConnectException
 import java.nio.charset.StandardCharsets
@@ -35,6 +37,7 @@ import org.asynchttpclient.DefaultAsyncHttpClientConfig
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
+import scala.concurrent.Promise
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration._
 import scala.language.higherKinds
@@ -55,8 +58,8 @@ import spray.json._
  * @param port the port
  * @param timeout the timeout in msecs to wait for a response
  * @param maxResponse the maximum size in bytes the connection will accept
- * @param queueSize once all connections are used, how big of queue to allow for additional requests
  * @param retryInterval duration between retries for TCP connection errors
+ * @param containerClientConfig config for ContainerClient
  */
 protected class SttpContainerClient(
   hostname: String,
@@ -65,18 +68,22 @@ protected class SttpContainerClient(
   maxResponse: ByteSize,
   retryInterval: FiniteDuration = 100.milliseconds)(implicit logging: Logging, as: ActorSystem)
     extends ContainerClient {
-
+  //val acceptFactory = new DefaultThreadFactory("accept")
+  val maxConnections = 10
   val config = new DefaultAsyncHttpClientConfig.Builder()
-    .setMaxConnections(100)
-    .setMaxConnectionsPerHost(100)
-    .setPooledConnectionIdleTimeout(100)
-    //.setConnectionTtl(500)
-    .setConnectTimeout(1000) //default 5000
-    .setRequestTimeout(100) //default 60000
+    .setMaxConnections(maxConnections)
+    .setMaxConnectionsPerHost(maxConnections)
     .setPooledConnectionIdleTimeout(60000) //default 60000
-    .setMaxRequestRetry(0) //default 5
-    //.setIoThreadsCount()
+    .setMaxRequestRetry(0) //default 5 (we will handle our own retries)
+//    .setThreadFactory(new ThreadFactory { override def newThread(r: Runnable): Thread = ??? })
+    .setIoThreadsCount(1)
+    .setShutdownTimeout(30000)
     .build()
+
+  val defaultThreads =
+    Math.max(1, SystemPropertyUtil.getInt("io.netty.eventLoopThreads", NettyRuntime.availableProcessors() * 2))
+
+  println(s"STTP DEFAULT THREADS: ${defaultThreads}")
 
   //val ahc = Async
   implicit val executionContext = as.dispatcher
@@ -96,7 +103,33 @@ protected class SttpContainerClient(
   }
   def close() = {
     logging.info(this, "closing sttp")
-    Future.successful(backend.close())
+    backend.close()
+    val closedPromise = Promise[Unit]()
+    repeatedlyClose(closedPromise)
+    closedPromise.future
+  }
+
+  private def repeatedlyClose(closedPromise: Promise[Unit]): Unit = {
+    //close is async unfortunately, so we wait...
+    val unclosed = getThreadNames("AsyncHttp")
+    if (unclosed.length > 1) {
+      logging.warn(this, s"${unclosed.length} threads not closed yet")
+      as.scheduler.scheduleOnce(1.seconds) {
+        backend
+          .close() //even if we continually monitor backend.close(), not all threads are closed...so retry closing here
+        repeatedlyClose(closedPromise)
+      }
+    } else {
+      logging.info(this, "all threads closed")
+      closedPromise.success(Unit)
+    }
+  }
+
+  private def getThreadNames(prefix: String) = {
+    val threadGroup: ThreadGroup = Thread.currentThread.getThreadGroup
+    val raw = new Array[Thread](threadGroup.activeCount + 10) //add 10 in case more threads are allocated before we enumerate...
+    threadGroup.enumerate(raw)
+    raw.filter(_ != null).filter(_.getName.startsWith(prefix))
   }
 
   /**
