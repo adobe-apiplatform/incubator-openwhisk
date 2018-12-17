@@ -79,7 +79,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     }
   }
 
-  def logContainerStart(r: Run, containerState: String, activeActivations: Int): Unit = {
+  def logContainerStart(r: Run, containerState: String, activeActivations: Int, container: Option[Container]): Unit = {
     val namespaceName = r.msg.user.namespace.name
     val actionName = r.action.name.name
     val maxConcurrent = r.action.limits.concurrency.maxConcurrent
@@ -88,7 +88,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     r.msg.transid.mark(
       this,
       LoggingMarkers.INVOKER_CONTAINER_START(containerState),
-      s"containerStart containerState: $containerState ($activeActivations of max $maxConcurrent) action: $actionName namespace: $namespaceName activationId: $activationId",
+      s"containerStart containerState: $containerState container: $container activations: $activeActivations of max $maxConcurrent action: $actionName namespace: $namespaceName activationId: $activationId",
       akka.event.Logging.InfoLevel)
   }
 
@@ -141,19 +141,24 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
         createdContainer match {
           case Some(((actor, data), containerState)) =>
             //increment active count before storing in pool map
-            val newData = data match {
+            val (newData, container) = data match {
               case p: PreWarmedData =>
-                WarmingData(p.container, r.msg.user.namespace.name, r.action, Instant.now, 1)
-              case pw: WarmingData => pw.incrementActive
-              case w: WarmedData   => w.incrementActive
-              case _               => data //in case of NoData or MemoryData,
+                //only use WarmingData for concurrency-supporting actions
+                if (r.action.limits.concurrency.maxConcurrent > 1) {
+                  WarmingData(p.container, r.msg.user.namespace.name, r.action, Instant.now, 1) -> Some(p.container)
+                } else {
+                  p -> Some(p.container)
+                }
+              case pw: WarmingData => pw.incrementActive -> Some(pw.container)
+              case w: WarmedData   => w.incrementActive -> Some(w.container)
+              case _               => data -> None //in case of NoData or MemoryData,
             }
             //only move to busyPool if max reached
             if (newData.activeActivationCount >= r.action.limits.concurrency.maxConcurrent) {
               if (r.action.limits.concurrency.maxConcurrent > 1) {
                 logging.info(
                   this,
-                  s"container for ${r.action} is now busy with ${newData.activeActivationCount} activations")
+                  s"container ${container} is now busy with ${newData.activeActivationCount} activations")
               }
               busyPool = busyPool + (actor -> newData)
               freePool = freePool - actor
@@ -170,7 +175,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
               runBuffer.dequeueOption.foreach { case (run, _) => self ! run }
             }
             actor ! r // forwards the run request to the container
-            logContainerStart(r, containerState, newData.activeActivationCount)
+            logContainerStart(r, containerState, newData.activeActivationCount, container)
           case None =>
             // this can also happen if createContainer fails to start a new container, or
             // if a job is rescheduled but the container it was allocated to has not yet destroyed itself
