@@ -207,6 +207,7 @@ class MesosTask(override protected val id: ContainerId,
   override def resume()(implicit transid: TransactionId): Future[Unit] = {
     // resume not supported
     Future.successful(Unit)
+    super.resume()
   }
 
   /** Completely destroys this instance of the container. */
