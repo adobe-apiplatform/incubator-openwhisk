@@ -1081,9 +1081,9 @@ class ContainerProxyTests
       suspendCount += 1
       super.suspend()
     }
-    def resume()(implicit transid: TransactionId): Future[Unit] = {
+    override def resume()(implicit transid: TransactionId): Future[Unit] = {
       resumeCount += 1
-      Future.successful(())
+      super.resume()
     }
     override def destroy()(implicit transid: TransactionId): Future[Unit] = {
       destroyCount += 1
