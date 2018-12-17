@@ -285,7 +285,6 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
 
   /** Creates a new prewarmed container */
   def prewarmContainer(exec: CodeExec[_], memoryLimit: ByteSize): Unit = {
-    logging.info(this, "### prewarming a new container")
     childFactory(context) ! Start(exec, memoryLimit)
   }
 
