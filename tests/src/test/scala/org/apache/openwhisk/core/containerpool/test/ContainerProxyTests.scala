@@ -289,7 +289,7 @@ class ContainerProxyTests
   it should "run an action and continue with a next run without pausing the container" in within(timeout) {
     val container = new TestContainer
     val factory = createFactory(Future.successful(container))
-    val acker = createAcker()
+    val acker = createSyncAcker()
     val store = createStore
     val collector = createCollector()
 
