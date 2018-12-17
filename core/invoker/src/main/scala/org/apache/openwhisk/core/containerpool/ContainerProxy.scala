@@ -457,7 +457,6 @@ class ContainerProxy(
       .flatMap { initInterval =>
         //immediately setup warmedData for use (before first execution) so that concurrent actions can use it asap
         if (initInterval.isDefined) {
-          println(s"### init ${initInterval.get.duration}")
           self ! InitCompleted(WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now, 1))
         }
         val parameters = job.msg.content getOrElse JsObject.empty
@@ -480,7 +479,6 @@ class ContainerProxy(
             job.action.limits.concurrency.maxConcurrent)(job.msg.transid)
           .map {
             case (runInterval, response) =>
-              println(s"### run ${runInterval.duration}")
               val initRunInterval = initInterval
                 .map(i => Interval(runInterval.start.minusMillis(i.duration.toMillis), runInterval.end))
                 .getOrElse(runInterval)
