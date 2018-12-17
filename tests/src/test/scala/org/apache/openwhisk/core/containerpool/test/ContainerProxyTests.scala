@@ -131,7 +131,9 @@ class ContainerProxyTests
 
   /** Run the common action on the state-machine, assumes good cases */
   def run(machine: ActorRef, currentState: ContainerState, expectInit: Boolean = true) = {
-    machine ! Run(action, newMessage)
+    val msg = newMessage
+    system.log.info(s"running ${msg.activationId}")
+    machine ! Run(action, msg)
     expectMsg(Transition(machine, currentState, Running))
     if (expectInit) {
       expectWarmed(invocationNamespace.name, action, 1)
@@ -171,6 +173,7 @@ class ContainerProxyTests
       activation.annotations.get("limits") shouldBe Some(a.limits.toJson)
       activation.annotations.get("path") shouldBe Some(a.fullyQualifiedName(false).toString.toJson)
       activation.annotations.get("kind") shouldBe Some(a.exec.kind.toJson)
+      system.log.info(s"acking ${activation.activationId}")
       Future.successful(())
   }
 
@@ -320,9 +323,6 @@ class ContainerProxyTests
       val initRunActivation = acker.calls(0)._2
       val initRunTid = acker.calls(0)._1
       val runOnlyTid = acker.calls(1)._1
-
-      println(s"#### ${acker.calls(0)._2.duration} ")
-      println(s"#### ${acker.calls(1)._2.duration} ")
 
       initRunActivation.duration shouldBe Some((initInterval.duration + runInterval.duration).toMillis)
       initRunActivation.annotations
