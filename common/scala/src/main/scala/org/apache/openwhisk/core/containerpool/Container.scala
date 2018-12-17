@@ -207,6 +207,7 @@ trait Container {
   private def closeConnections(toClose: Option[ContainerClient]): Future[Unit] = {
     toClose.map(_.close()).getOrElse(Future.successful(()))
   }
+  override def toString() = s"${id.toString}"
 }
 
 /** Indicates a general error with the container */
