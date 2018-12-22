@@ -62,6 +62,11 @@ object Container {
     loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool)
 }
 
+/**
+ * Abstraction for Container operations.
+ * Container manipulation (specifically suspend/resume/destroy) is NOT thread-safe and MUST be synchronized by caller.
+ * Container access (specifically run) is thread-safe (e.g. for concurrent activation processing).
+ */
 trait Container {
 
   implicit protected val as: ActorSystem
@@ -77,7 +82,7 @@ trait Container {
   protected var containerHttpMaxConcurrent: Int = 1
   protected var containerHttpTimeout: FiniteDuration = 60.seconds
 
-  /** Stops the container from consuming CPU cycles. */
+  /** Stops the container from consuming CPU cycles. NOT thread-safe - caller must synchronize. */
   def suspend()(implicit transid: TransactionId): Future[Unit] = {
     //close connection first, then close connection pool
     //(testing pool recreation vs connection closing, time was similar - so using the simpler recreation approach)
@@ -86,7 +91,7 @@ trait Container {
     closeConnections(toClose)
   }
 
-  /** Dual of halt. */
+  /** Dual of halt. NOT thread-safe - caller must synchronize.*/
   def resume()(implicit transid: TransactionId): Future[Unit] = {
     httpConnection = Some(openConnections(containerHttpTimeout, containerHttpMaxConcurrent))
     Future.successful({})
@@ -140,7 +145,7 @@ trait Container {
       }
   }
 
-  /** Runs code in the container. */
+  /** Runs code in the container. Thread-safe - caller may invoke concurrently for concurrent activation processing. */
   def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, maxConcurrent: Int)(
     implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
     val actionName = environment.fields.get("action_name").map(_.convertTo[String]).getOrElse("")
