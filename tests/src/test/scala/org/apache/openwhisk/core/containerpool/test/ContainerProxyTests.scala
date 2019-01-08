@@ -132,7 +132,6 @@ class ContainerProxyTests
   /** Run the common action on the state-machine, assumes good cases */
   def run(machine: ActorRef, currentState: ContainerState, expectInit: Boolean = true) = {
     val msg = newMessage
-    system.log.info(s"running ${msg.activationId}")
     machine ! Run(action, msg)
     expectMsg(Transition(machine, currentState, Running))
     if (expectInit) {
@@ -173,7 +172,6 @@ class ContainerProxyTests
       activation.annotations.get("limits") shouldBe Some(a.limits.toJson)
       activation.annotations.get("path") shouldBe Some(a.fullyQualifiedName(false).toString.toJson)
       activation.annotations.get("kind") shouldBe Some(a.exec.kind.toJson)
-      system.log.info(s"acking ${activation.activationId}")
       Future.successful(())
   }
 
