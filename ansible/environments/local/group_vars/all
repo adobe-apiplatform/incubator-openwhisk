@@ -34,3 +34,8 @@ env_hosts_dir: "{{ playbook_dir }}/environments/local"
 container_pool_akka_client: true
 runtimes_enable_concurrency: true
 limit_action_concurrency_max: 500
+
+skip_pull_runtimes: true
+controller_client_auth: false
+metrics_kamon_statsd_host: localhost
+metrics_kamon_statsd_port: 9125

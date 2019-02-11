@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.LongAdder
 
-import akka.actor.{Actor, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorSystem, Props}
 import akka.cluster.ClusterEvent._
 import akka.cluster.{Cluster, Member, MemberStatus}
 import akka.event.Logging.InfoLevel
@@ -37,7 +37,6 @@ import org.apache.openwhisk.common._
 import org.apache.openwhisk.core.WhiskConfig._
 import org.apache.openwhisk.core.connector._
 import org.apache.openwhisk.core.entity._
-import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.loadBalancer.InvokerState.{Healthy, Offline, Unhealthy, Unresponsive}
 import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
 import org.apache.openwhisk.spi.SpiLoader
@@ -148,14 +147,13 @@ import scala.util.{Failure, Success}
  *   the invoker may skip container launch in case there is concurrent capacity available for a container launched via
  *   some other loadbalancer.
  */
-class ShardingContainerPoolBalancer(
-  config: WhiskConfig,
-  controllerInstance: ControllerInstanceId,
-  private val feedFactory: FeedFactory,
-  private val invokerPoolFactory: InvokerPoolFactory,
-  lbConfig: ShardingContainerPoolBalancerConfig =
-    loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer),
-  private val messagingProvider: MessagingProvider = SpiLoader.get[MessagingProvider])(
+class ContainerInitBalancer(config: WhiskConfig,
+                            controllerInstance: ControllerInstanceId,
+                            private val feedFactory: FeedFactory,
+                            private val invokerPoolFactory: InvokerPoolFactory,
+                            lbConfig: ShardingContainerPoolBalancerConfig =
+                              loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer),
+                            private val messagingProvider: MessagingProvider = SpiLoader.get[MessagingProvider])(
   implicit val actorSystem: ActorSystem,
   logging: Logging,
   materializer: ActorMaterializer)
@@ -182,11 +180,13 @@ class ShardingContainerPoolBalancer(
   private val totalActivations = new LongAdder()
   private val totalBlackBoxActivationMemory = new LongAdder()
   private val totalManagedActivationMemory = new LongAdder()
+  private val initingSlots = TrieMap.empty[FullyQualifiedEntityName, ResizableSemaphore]
 
   /** State needed for scheduling. */
   protected[loadBalancer] val schedulingState = ShardingContainerPoolBalancerState()(lbConfig)
 
   actorSystem.scheduler.schedule(0.seconds, 10.seconds) {
+    println(s"emitting...${totalManagedActivationMemory.longValue}")
     MetricEmitter.emitHistogramMetric(LOADBALANCER_ACTIVATIONS_INFLIGHT(controllerInstance), totalActivations.longValue)
     MetricEmitter.emitHistogramMetric(
       LOADBALANCER_MEMORY_INFLIGHT(controllerInstance, ""),
@@ -256,12 +256,12 @@ class ShardingContainerPoolBalancer(
 
     override def receive: Receive = {
       case CurrentInvokerPoolState(newState) =>
-        schedulingState.updateInvokers(newState)
+        schedulingState.updateInvokers(newState, false)
 
       // State of the cluster as it is right now
       case CurrentClusterState(members, _, _, _, _) =>
         availableMembers = members.filter(_.status == MemberStatus.Up)
-        schedulingState.updateCluster(availableMembers.size)
+        schedulingState.updateCluster(availableMembers.size, false)
 
       // General lifecycle events and events concerning the reachability of members. Split-brain is not a huge concern
       // in this case as only the invoker-threshold is adjusted according to the perceived cluster-size.
@@ -277,7 +277,7 @@ class ShardingContainerPoolBalancer(
           case _                         => availableMembers
         }
 
-        schedulingState.updateCluster(availableMembers.size)
+        schedulingState.updateCluster(availableMembers.size, false)
     }
   }))
 
@@ -301,16 +301,17 @@ class ShardingContainerPoolBalancer(
       val hash = ShardingContainerPoolBalancer.generateHash(msg.user.namespace.name, action.fullyQualifiedName(false))
       val homeInvoker = hash % invokersToUse.size
       val stepSize = stepSizes(hash % stepSizes.size)
-      val invoker: Option[(InvokerInstanceId, Boolean)] = ShardingContainerPoolBalancer.schedule(
+
+      val invoker: Option[(InvokerInstanceId, Boolean, Boolean)] = ContainerInitBalancer.schedule(
         action.limits.concurrency.maxConcurrent,
         action.fullyQualifiedName(true),
         invokersToUse,
         schedulingState.invokerSlots,
-        action.limits.memory.megabytes,
+        math.max(action.exec.size.toKB.toInt, 1), //slots are the init size of code, in mb (should be kb?)
         homeInvoker,
         stepSize)
       invoker.foreach {
-        case (_, true) =>
+        case (_, true, _) =>
           val metric =
             if (isBlackboxInvocation)
               LoggingMarkers.BLACKBOX_SYSTEM_OVERLOAD
@@ -319,7 +320,7 @@ class ShardingContainerPoolBalancer(
           MetricEmitter.emitCounterMetric(metric)
         case _ =>
       }
-      invoker.map(_._1)
+      invoker.map(s => s._1 -> s._3)
     } else {
       None
     }
@@ -328,9 +329,9 @@ class ShardingContainerPoolBalancer(
       .map { invoker =>
         logging.info(
           this,
-          s"activation ${msg.activationId} for '${msg.action.asString}' ($actionType) by namespace '${msg.user.namespace.name.asString}' with memory limit ${action.limits.memory.megabytes}MB assigned to $invoker")
-        val activationResult = setupActivation(msg, action, invoker)
-        sendActivationToInvoker(messageProducer, msg, invoker).map(_ => activationResult)
+          s"activation ${msg.activationId} for '${msg.action.asString}' ($actionType) by namespace '${msg.user.namespace.name.asString}' with init size ${action.exec.size.toMB}MB assigned to $invoker")
+        val activationResult = setupActivation(msg, action, invoker._1, invoker._2)
+        sendActivationToInvoker(messageProducer, msg, invoker._1).map(_ => activationResult)
       }
       .getOrElse {
         // report the state of all invokers
@@ -354,13 +355,20 @@ class ShardingContainerPoolBalancer(
    */
   private def setupActivation(msg: ActivationMessage,
                               action: ExecutableWhiskActionMetaData,
-                              instance: InvokerInstanceId): Future[Either[ActivationId, WhiskActivation]] = {
+                              instance: InvokerInstanceId,
+                              isNewContainer: Boolean): Future[Either[ActivationId, WhiskActivation]] = {
 
     totalActivations.increment()
     val isBlackboxInvocation = action.exec.pull
     val totalActivationMemory =
       if (isBlackboxInvocation) totalBlackBoxActivationMemory else totalManagedActivationMemory
-    totalActivationMemory.add(action.limits.memory.megabytes)
+
+    //we only track usage of actions expected to init
+    if (isNewContainer) {
+      val sizeOrMin = math.max(action.exec.size.toKB, 1l)
+      println(s"adding ${}")
+      totalActivationMemory.add(sizeOrMin)
+    }
 
     activationsPerNamespace.getOrElseUpdate(msg.user.namespace.uuid, new LongAdder()).increment()
 
@@ -389,12 +397,12 @@ class ShardingContainerPoolBalancer(
           msg.activationId,
           msg.user.namespace.uuid,
           instance,
-          action.limits.memory.megabytes.MB,
+          action.exec.size, //action.limits.memory.megabytes.MB,
           action.limits.concurrency.maxConcurrent,
           action.fullyQualifiedName(true),
           timeoutHandler,
           isBlackboxInvocation,
-          false)
+          isNewContainer)
       })
 
     resultPromise
@@ -491,13 +499,22 @@ class ShardingContainerPoolBalancer(
     activationSlots.remove(aid) match {
       case Some(entry) =>
         totalActivations.decrement()
-        val totalActivationMemory =
-          if (entry.isBlackbox) totalBlackBoxActivationMemory else totalManagedActivationMemory
-        totalActivationMemory.add(entry.memory.toMB * (-1))
+        val sizeOrMin = math.max(entry.memory.toKB, 1l)
+        if (entry.isNewContainer) {
+          val totalActivationMemory =
+            if (entry.isBlackbox) totalBlackBoxActivationMemory else totalManagedActivationMemory
+          println(s"removing ${entry.memory.toKB}")
+          totalActivationMemory.add(sizeOrMin * (-1))
+        }
         activationsPerNamespace.get(entry.namespaceId).foreach(_.decrement())
         schedulingState.invokerSlots
           .lift(invoker.toInt)
-          .foreach(_.releaseConcurrent(entry.fullyQualifiedEntityName, entry.maxConcurrent, entry.memory.toMB.toInt))
+          .foreach { s =>
+            println(s"releasing ${sizeOrMin.toInt}")
+            //if (entry.memory.toKB.toInt > 0) {
+            s.releaseConcurrent(entry.fullyQualifiedEntityName, entry.maxConcurrent, sizeOrMin.toInt)
+          }
+        //}
         if (!forced) {
           entry.timeoutHandler.cancel()
           // notice here that the activationPromises is not touched, because the expectation is that
@@ -542,7 +559,7 @@ class ShardingContainerPoolBalancer(
       Some(monitor))
 }
 
-object ShardingContainerPoolBalancer extends LoadBalancerProvider {
+object ContainerInitBalancer extends LoadBalancerProvider {
 
   override def instance(whiskConfig: WhiskConfig, instance: ControllerInstanceId)(
     implicit actorSystem: ActorSystem,
@@ -586,7 +603,7 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
       }
 
     }
-    new ShardingContainerPoolBalancer(whiskConfig, instance, feedFactory, invokerPoolFactory)
+    new ContainerInitBalancer(whiskConfig, instance, feedFactory, invokerPoolFactory)
   }
 
   def requiredProperties: Map[String, String] = kafkaHosts
@@ -619,30 +636,31 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
    * @param slots Number of slots, that need to be acquired (e.g. memory in MB)
    * @param index the index to start from (initially should be the "homeInvoker"
    * @param step stable identifier of the entity to be scheduled
-   * @return an invoker to schedule to or None of no invoker is available
+   * @return an invoker to schedule to or None of no invoker is available, isForced, isNew
    */
   @tailrec
-  def schedule(
-    maxConcurrent: Int,
-    fqn: FullyQualifiedEntityName,
-    invokers: IndexedSeq[InvokerHealth],
-    dispatched: IndexedSeq[NestedSemaphore[FullyQualifiedEntityName]],
-    slots: Int,
-    index: Int,
-    step: Int,
-    stepsDone: Int = 0)(implicit logging: Logging, transId: TransactionId): Option[(InvokerInstanceId, Boolean)] = {
+  def schedule(maxConcurrent: Int,
+               fqn: FullyQualifiedEntityName,
+               invokers: IndexedSeq[InvokerHealth],
+               dispatched: IndexedSeq[NestedSemaphore[FullyQualifiedEntityName]],
+               slots: Int,
+               index: Int,
+               step: Int,
+               stepsDone: Int = 0)(implicit logging: Logging,
+                                   transId: TransactionId): Option[(InvokerInstanceId, Boolean, Boolean)] = {
     val numInvokers = invokers.size
 
     if (numInvokers > 0) {
       val invoker = invokers(index)
       //test this invoker - if this action supports concurrency, use the scheduleConcurrent function
       val getConcurrentOrSlot = if (invoker.status.isUsable) {
+
         dispatched(invoker.id.toInt).tryAcquireConcurrent(fqn, maxConcurrent, slots)
       } else {
         (false, false)
       }
       if (invoker.status.isUsable && getConcurrentOrSlot._1) {
-        Some(invoker.id, false)
+        Some(invoker.id, false, getConcurrentOrSlot._2)
       } else {
         // If we've gone through all invokers
         if (stepsDone == numInvokers + 1) {
@@ -652,7 +670,7 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
             val random = healthyInvokers(ThreadLocalRandom.current().nextInt(healthyInvokers.size)).id
             dispatched(random.toInt).forceAcquireConcurrent(fqn, maxConcurrent, slots)
             logging.warn(this, s"system is overloaded. Chose invoker${random.toInt} by random assignment.")
-            Some(random, true)
+            Some(random, true, true)
           } else {
             None
           }
@@ -667,158 +685,155 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
   }
 }
 
-/**
- * Holds the state necessary for scheduling of actions.
- *
- * @param _invokers all of the known invokers in the system
- * @param _managedInvokers all invokers for managed runtimes
- * @param _blackboxInvokers all invokers for blackbox runtimes
- * @param _managedStepSizes the step-sizes possible for the current managed invoker count
- * @param _blackboxStepSizes the step-sizes possible for the current blackbox invoker count
- * @param _invokerSlots state of accessible slots of each invoker
- */
-case class ShardingContainerPoolBalancerState(
-  private var _invokers: IndexedSeq[InvokerHealth] = IndexedSeq.empty[InvokerHealth],
-  private var _managedInvokers: IndexedSeq[InvokerHealth] = IndexedSeq.empty[InvokerHealth],
-  private var _blackboxInvokers: IndexedSeq[InvokerHealth] = IndexedSeq.empty[InvokerHealth],
-  private var _managedStepSizes: Seq[Int] = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(0),
-  private var _blackboxStepSizes: Seq[Int] = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(0),
-  protected[loadBalancer] var _invokerSlots: IndexedSeq[NestedSemaphore[FullyQualifiedEntityName]] =
-    IndexedSeq.empty[NestedSemaphore[FullyQualifiedEntityName]],
-  private var _clusterSize: Int = 1)(
-  lbConfig: ShardingContainerPoolBalancerConfig =
-    loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer))(implicit logging: Logging) {
-
-  // Managed fraction and blackbox fraction can be between 0.0 and 1.0. The sum of these two fractions has to be between
-  // 1.0 and 2.0.
-  // If the sum is 1.0 that means, that there is no overlap of blackbox and managed invokers. If the sum is 2.0, that
-  // means, that there is no differentiation between managed and blackbox invokers.
-  // If the sum is below 1.0 with the initial values from config, the blackbox fraction will be set higher than
-  // specified in config and adapted to the managed fraction.
-  private val managedFraction: Double = Math.max(0.0, Math.min(1.0, lbConfig.managedFraction))
-  private val blackboxFraction: Double = Math.max(1.0 - managedFraction, Math.min(1.0, lbConfig.blackboxFraction))
-  logging.info(this, s"managedFraction = $managedFraction, blackboxFraction = $blackboxFraction")(
-    TransactionId.loadbalancer)
-
-  /** Getters for the variables, setting from the outside is only allowed through the update methods below */
-  def invokers: IndexedSeq[InvokerHealth] = _invokers
-  def managedInvokers: IndexedSeq[InvokerHealth] = _managedInvokers
-  def blackboxInvokers: IndexedSeq[InvokerHealth] = _blackboxInvokers
-  def managedStepSizes: Seq[Int] = _managedStepSizes
-  def blackboxStepSizes: Seq[Int] = _blackboxStepSizes
-  def invokerSlots: IndexedSeq[NestedSemaphore[FullyQualifiedEntityName]] = _invokerSlots
-  def clusterSize: Int = _clusterSize
-
-  /**
-   * @param memory
-   * @return calculated invoker slot
-   */
-  private def getInvokerSlot(memory: ByteSize): ByteSize = {
-    val newTreshold = if (memory / _clusterSize < MemoryLimit.minMemory) {
-      logging.warn(
-        this,
-        s"registered controllers: ${_clusterSize}: the slots per invoker fall below the min memory of one action.")(
-        TransactionId.loadbalancer)
-      MemoryLimit.minMemory
-    } else {
-      memory / _clusterSize
-    }
-    newTreshold
-  }
-
-  /**
-   * Updates the scheduling state with the new invokers.
-   *
-   * This is okay to not happen atomically since dirty reads of the values set are not dangerous. It is important though
-   * to update the "invokers" variables last, since they will determine the range of invokers to choose from.
-   *
-   * Handling a shrinking invokers list is not necessary, because InvokerPool won't shrink its own list but rather
-   * report the invoker as "Offline".
-   *
-   * It is important that this method does not run concurrently to itself and/or to [[updateCluster]]
-   */
-  def updateInvokers(newInvokers: IndexedSeq[InvokerHealth], sharded: Boolean = true): Unit = {
-    val oldSize = _invokers.size
-    val newSize = newInvokers.size
-
-    // for small N, allow the managed invokers to overlap with blackbox invokers, and
-    // further assume that blackbox invokers << managed invokers
-    val managed = Math.max(1, Math.ceil(newSize.toDouble * managedFraction).toInt)
-    val blackboxes = Math.max(1, Math.floor(newSize.toDouble * blackboxFraction).toInt)
-
-    _invokers = newInvokers
-    _managedInvokers = _invokers.take(managed)
-    _blackboxInvokers = _invokers.takeRight(blackboxes)
-
-    if (oldSize != newSize) {
-      _managedStepSizes = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(managed)
-      _blackboxStepSizes = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(blackboxes)
-
-      if (oldSize < newSize) {
-        // Keeps the existing state..
-        _invokerSlots = _invokerSlots ++ _invokers.drop(_invokerSlots.length).map { invoker =>
-          new NestedSemaphore[FullyQualifiedEntityName](
-            (if (sharded) getInvokerSlot(invoker.id.userMemory) else invoker.id.userMemory).toMB.toInt)
-        }
-      }
-    }
-
-    logging.info(
-      this,
-      s"loadbalancer invoker status updated. managedInvokers = $managed blackboxInvokers = $blackboxes")(
-      TransactionId.loadbalancer)
-  }
-
-  /**
-   * Updates the size of a cluster. Throws away all state for simplicity.
-   *
-   * This is okay to not happen atomically, since a dirty read of the values set are not dangerous. At worst the
-   * scheduler works on outdated invoker-load data which is acceptable.
-   *
-   * It is important that this method does not run concurrently to itself and/or to [[updateInvokers]]
-   */
-  def updateCluster(newSize: Int, sharded: Boolean = true): Unit = {
-    val actualSize = newSize max 1 // if a cluster size < 1 is reported, falls back to a size of 1 (alone)
-    if (_clusterSize != actualSize) {
-      _clusterSize = actualSize
-      _invokerSlots = _invokers.map { invoker =>
-        new NestedSemaphore[FullyQualifiedEntityName](
-          (if (sharded) getInvokerSlot(invoker.id.userMemory) else invoker.id.userMemory).toMB.toInt)
-      }
-      logging.info(this, s"loadbalancer cluster size changed to $actualSize active nodes.")(TransactionId.loadbalancer)
-    }
-  }
-}
-
-/**
- * Configuration for the cluster created between loadbalancers.
- *
- * @param useClusterBootstrap Whether or not to use a bootstrap mechanism
- */
-case class ClusterConfig(useClusterBootstrap: Boolean)
-
-/**
- * Configuration for the sharding container pool balancer.
- *
- * @param blackboxFraction the fraction of all invokers to use exclusively for blackboxes
- * @param timeoutFactor factor to influence the timeout period for forced active acks (time-limit.std * timeoutFactor + 1m)
- */
-case class ShardingContainerPoolBalancerConfig(managedFraction: Double, blackboxFraction: Double, timeoutFactor: Int)
-
-/**
- * State kept for each activation slot until completion.
- *
- * @param id id of the activation
- * @param namespaceId namespace that invoked the action
- * @param invokerName invoker the action is scheduled to
- * @param timeoutHandler times out completion of this activation, should be canceled on good paths
- */
-case class ActivationEntry(id: ActivationId,
-                           namespaceId: UUID,
-                           invokerName: InvokerInstanceId,
-                           memory: ByteSize,
-                           maxConcurrent: Int,
-                           fullyQualifiedEntityName: FullyQualifiedEntityName,
-                           timeoutHandler: Cancellable,
-                           isBlackbox: Boolean,
-                           isNewContainer: Boolean)
+///**
+// * Holds the state necessary for scheduling of actions.
+// *
+// * @param _invokers all of the known invokers in the system
+// * @param _managedInvokers all invokers for managed runtimes
+// * @param _blackboxInvokers all invokers for blackbox runtimes
+// * @param _managedStepSizes the step-sizes possible for the current managed invoker count
+// * @param _blackboxStepSizes the step-sizes possible for the current blackbox invoker count
+// * @param _invokerSlots state of accessible slots of each invoker
+// */
+//case class ShardingContainerPoolBalancerState(
+//  private var _invokers: IndexedSeq[InvokerHealth] = IndexedSeq.empty[InvokerHealth],
+//  private var _managedInvokers: IndexedSeq[InvokerHealth] = IndexedSeq.empty[InvokerHealth],
+//  private var _blackboxInvokers: IndexedSeq[InvokerHealth] = IndexedSeq.empty[InvokerHealth],
+//  private var _managedStepSizes: Seq[Int] = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(0),
+//  private var _blackboxStepSizes: Seq[Int] = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(0),
+//  protected[loadBalancer] var _invokerSlots: IndexedSeq[NestedSemaphore[FullyQualifiedEntityName]] =
+//    IndexedSeq.empty[NestedSemaphore[FullyQualifiedEntityName]],
+//  private var _clusterSize: Int = 1)(
+//  lbConfig: ShardingContainerPoolBalancerConfig =
+//    loadConfigOrThrow[ShardingContainerPoolBalancerConfig](ConfigKeys.loadbalancer))(implicit logging: Logging) {
+//
+//  // Managed fraction and blackbox fraction can be between 0.0 and 1.0. The sum of these two fractions has to be between
+//  // 1.0 and 2.0.
+//  // If the sum is 1.0 that means, that there is no overlap of blackbox and managed invokers. If the sum is 2.0, that
+//  // means, that there is no differentiation between managed and blackbox invokers.
+//  // If the sum is below 1.0 with the initial values from config, the blackbox fraction will be set higher than
+//  // specified in config and adapted to the managed fraction.
+//  private val managedFraction: Double = Math.max(0.0, Math.min(1.0, lbConfig.managedFraction))
+//  private val blackboxFraction: Double = Math.max(1.0 - managedFraction, Math.min(1.0, lbConfig.blackboxFraction))
+//  logging.info(this, s"managedFraction = $managedFraction, blackboxFraction = $blackboxFraction")(
+//    TransactionId.loadbalancer)
+//
+//  /** Getters for the variables, setting from the outside is only allowed through the update methods below */
+//  def invokers: IndexedSeq[InvokerHealth] = _invokers
+//  def managedInvokers: IndexedSeq[InvokerHealth] = _managedInvokers
+//  def blackboxInvokers: IndexedSeq[InvokerHealth] = _blackboxInvokers
+//  def managedStepSizes: Seq[Int] = _managedStepSizes
+//  def blackboxStepSizes: Seq[Int] = _blackboxStepSizes
+//  def invokerSlots: IndexedSeq[NestedSemaphore[FullyQualifiedEntityName]] = _invokerSlots
+//  def clusterSize: Int = _clusterSize
+//
+//  /**
+//   * @param memory
+//   * @return calculated invoker slot
+//   */
+//  private def getInvokerSlot(memory: ByteSize): ByteSize = {
+//    val newTreshold = if (memory / _clusterSize < MemoryLimit.minMemory) {
+//      logging.warn(
+//        this,
+//        s"registered controllers: ${_clusterSize}: the slots per invoker fall below the min memory of one action.")(
+//        TransactionId.loadbalancer)
+//      MemoryLimit.minMemory
+//    } else {
+//      memory / _clusterSize
+//    }
+//    newTreshold
+//  }
+//
+//  /**
+//   * Updates the scheduling state with the new invokers.
+//   *
+//   * This is okay to not happen atomically since dirty reads of the values set are not dangerous. It is important though
+//   * to update the "invokers" variables last, since they will determine the range of invokers to choose from.
+//   *
+//   * Handling a shrinking invokers list is not necessary, because InvokerPool won't shrink its own list but rather
+//   * report the invoker as "Offline".
+//   *
+//   * It is important that this method does not run concurrently to itself and/or to [[updateCluster]]
+//   */
+//  def updateInvokers(newInvokers: IndexedSeq[InvokerHealth]): Unit = {
+//    val oldSize = _invokers.size
+//    val newSize = newInvokers.size
+//
+//    // for small N, allow the managed invokers to overlap with blackbox invokers, and
+//    // further assume that blackbox invokers << managed invokers
+//    val managed = Math.max(1, Math.ceil(newSize.toDouble * managedFraction).toInt)
+//    val blackboxes = Math.max(1, Math.floor(newSize.toDouble * blackboxFraction).toInt)
+//
+//    _invokers = newInvokers
+//    _managedInvokers = _invokers.take(managed)
+//    _blackboxInvokers = _invokers.takeRight(blackboxes)
+//
+//    if (oldSize != newSize) {
+//      _managedStepSizes = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(managed)
+//      _blackboxStepSizes = ShardingContainerPoolBalancer.pairwiseCoprimeNumbersUntil(blackboxes)
+//
+//      if (oldSize < newSize) {
+//        // Keeps the existing state..
+//        _invokerSlots = _invokerSlots ++ _invokers.drop(_invokerSlots.length).map { invoker =>
+//          new NestedSemaphore[FullyQualifiedEntityName](getInvokerSlot(invoker.id.userMemory).toMB.toInt)
+//        }
+//      }
+//    }
+//
+//    logging.info(
+//      this,
+//      s"loadbalancer invoker status updated. managedInvokers = $managed blackboxInvokers = $blackboxes")(
+//      TransactionId.loadbalancer)
+//  }
+//
+//  /**
+//   * Updates the size of a cluster. Throws away all state for simplicity.
+//   *
+//   * This is okay to not happen atomically, since a dirty read of the values set are not dangerous. At worst the
+//   * scheduler works on outdated invoker-load data which is acceptable.
+//   *
+//   * It is important that this method does not run concurrently to itself and/or to [[updateInvokers]]
+//   */
+//  def updateCluster(newSize: Int): Unit = {
+//    val actualSize = newSize max 1 // if a cluster size < 1 is reported, falls back to a size of 1 (alone)
+//    if (_clusterSize != actualSize) {
+//      _clusterSize = actualSize
+//      _invokerSlots = _invokers.map { invoker =>
+//        new NestedSemaphore[FullyQualifiedEntityName](getInvokerSlot(invoker.id.userMemory).toMB.toInt)
+//      }
+//      logging.info(this, s"loadbalancer cluster size changed to $actualSize active nodes.")(TransactionId.loadbalancer)
+//    }
+//  }
+//}
+//
+///**
+// * Configuration for the cluster created between loadbalancers.
+// *
+// * @param useClusterBootstrap Whether or not to use a bootstrap mechanism
+// */
+//case class ClusterConfig(useClusterBootstrap: Boolean)
+//
+///**
+// * Configuration for the sharding container pool balancer.
+// *
+// * @param blackboxFraction the fraction of all invokers to use exclusively for blackboxes
+// * @param timeoutFactor factor to influence the timeout period for forced active acks (time-limit.std * timeoutFactor + 1m)
+// */
+//case class ShardingContainerPoolBalancerConfig(managedFraction: Double, blackboxFraction: Double, timeoutFactor: Int)
+//
+///**
+// * State kept for each activation slot until completion.
+// *
+// * @param id id of the activation
+// * @param namespaceId namespace that invoked the action
+// * @param invokerName invoker the action is scheduled to
+// * @param timeoutHandler times out completion of this activation, should be canceled on good paths
+// */
+//case class ActivationEntry(id: ActivationId,
+//                           namespaceId: UUID,
+//                           invokerName: InvokerInstanceId,
+//                           memory: ByteSize,
+//                           maxConcurrent: Int,
+//                           fullyQualifiedEntityName: FullyQualifiedEntityName,
+//                           timeoutHandler: Cancellable,
+//                           isBlackbox: Boolean)

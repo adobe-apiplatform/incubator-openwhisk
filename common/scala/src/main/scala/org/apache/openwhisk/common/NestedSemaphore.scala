@@ -29,10 +29,10 @@ import scala.collection.concurrent.TrieMap
 class NestedSemaphore[T](memoryPermits: Int) extends ForcibleSemaphore(memoryPermits) {
   private val actionConcurrentSlotsMap = TrieMap.empty[T, ResizableSemaphore] //one key per action; resized per container
 
-  final def tryAcquireConcurrent(actionid: T, maxConcurrent: Int, memoryPermits: Int): Boolean = {
+  final def tryAcquireConcurrent(actionid: T, maxConcurrent: Int, memoryPermits: Int): (Boolean, Boolean) = {
 
     if (maxConcurrent == 1) {
-      super.tryAcquire(memoryPermits)
+      (super.tryAcquire(memoryPermits), true)
     } else {
       tryOrForceAcquireConcurrent(actionid, maxConcurrent, memoryPermits, false)
     }
@@ -52,30 +52,30 @@ class NestedSemaphore[T](memoryPermits: Int) extends ForcibleSemaphore(memoryPer
    * @param maxConcurrent
    * @param memoryPermits
    * @param force
-   * @return
+   * @return true if acquired, true if new slot (vs concurrent use of existing slot)
    */
   private def tryOrForceAcquireConcurrent(actionid: T,
                                           maxConcurrent: Int,
                                           memoryPermits: Int,
-                                          force: Boolean): Boolean = {
+                                          force: Boolean): (Boolean, Boolean) = {
     val concurrentSlots = actionConcurrentSlotsMap
       .getOrElseUpdate(actionid, new ResizableSemaphore(0, maxConcurrent))
     if (concurrentSlots.tryAcquire(1)) {
-      true
+      (true, false)
     } else {
       // with synchronized:
       concurrentSlots.synchronized {
         if (concurrentSlots.tryAcquire(1)) {
-          true
+          (true, false)
         } else if (force) {
           super.forceAcquire(memoryPermits)
           concurrentSlots.release(maxConcurrent - 1, false)
-          true
+          (true, true)
         } else if (super.tryAcquire(memoryPermits)) {
           concurrentSlots.release(maxConcurrent - 1, false)
-          true
+          (true, true)
         } else {
-          false
+          (false, false)
         }
       }
     }
