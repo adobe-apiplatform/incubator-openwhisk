@@ -15,38 +15,18 @@
  * limitations under the License.
  */
 
-include 'common:scala'
+package org.apache.openwhisk.core.database.cosmosdb.cache
 
-include 'core:controller'
-include 'core:invoker'
-include 'core:cosmosdb:cache-invalidator'
+import akka.http.scaladsl.server.Directives._
+import akka.http.scaladsl.server.Route
 
-include 'tests'
-include 'tests:performance:gatling_tests'
-
-include 'tools:actionProxy'
-include 'tools:ow-utils'
-include 'tools:dev'
-
-include 'tools:admin'
-
-rootProject.name = 'openwhisk'
-
-gradle.ext.scala = [
-    version: '2.12.7',
-    compileFlags: ['-feature', '-unchecked', '-deprecation', '-Xfatal-warnings', '-Ywarn-unused-import']
-]
-
-gradle.ext.scalafmt = [
-    version: '1.5.0',
-    config: new File(rootProject.projectDir, '.scalafmt.conf')
-]
-
-gradle.ext.scoverage = [
-    deps: [
-        'org.scoverage:scalac-scoverage-plugin_2.12:1.3.1',
-        'org.scoverage:scalac-scoverage-runtime_2.12:1.3.1'
-    ]
-]
-
-gradle.ext.curator = [version:'4.0.0']
+class CacheInvalidatorApi {
+  val prometheus = new KamonPrometheus
+  val routes: Route = {
+    get {
+      path("ping") {
+        complete("pong")
+      } ~ prometheus.route
+    }
+  }
+}
