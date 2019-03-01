@@ -17,43 +17,6 @@
 
 package org.apache.openwhisk.utils
 
-import akka.actor.ActorRef
-import akka.event.EventBus
-import akka.event.LookupClassification
-import java.time.Instant
-
-case class NodeStats(mem: Double, cpu: Double, ports: Int, lastSeen: Instant)
-abstract sealed trait OWEvent
+/** NodeStats captures resource potential availability within a cluster. */
+case class NodeStats(mem: Double, cpu: Double, ports: Int)
 case class NodeStatsUpdate(stats: Map[String, NodeStats])
-final case class MsgEnvelope(topic: OWEvent, payload: Any)
-
-case object NodeStatsUpdateEvent extends OWEvent
-
-/**
- * Publishes the payload of the MsgEnvelope when the topic of the
- * MsgEnvelope equals the OWEvent specified when subscribing.
- */
-object Events extends EventBus with LookupClassification {
-  type Event = MsgEnvelope
-  type Classifier = OWEvent
-  type Subscriber = ActorRef
-
-  // is used for extracting the classifier from the incoming events
-  override protected def classify(event: Event): Classifier = event.topic
-
-  // will be invoked for each event for all subscribers which registered themselves
-  // for the event’s classifier
-  override protected def publish(event: Event, subscriber: Subscriber): Unit = {
-    subscriber ! event.payload
-  }
-
-  // must define a full order over the subscribers, expressed as expected from
-  // `java.lang.Comparable.compare`
-  override protected def compareSubscribers(a: Subscriber, b: Subscriber): Int =
-    a.compareTo(b)
-
-  // determines the initial size of the index data structure
-  // used internally (i.e. the expected number of different classifiers)
-  override protected def mapSize: Int = 8
-
-}

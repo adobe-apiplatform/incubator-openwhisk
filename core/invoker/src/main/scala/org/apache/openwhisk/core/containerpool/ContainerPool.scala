@@ -23,10 +23,8 @@ import org.apache.openwhisk.common.{AkkaLogging, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.connector.MessageFeed
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
-import org.apache.openwhisk.utils.Events
 import org.apache.openwhisk.utils.NodeStats
 import org.apache.openwhisk.utils.NodeStatsUpdate
-import org.apache.openwhisk.utils.NodeStatsUpdateEvent
 import scala.collection.immutable
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._
@@ -87,7 +85,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
   //if cluster managed resources, subscribe to events
   if (poolConfig.clusterManagedResources) {
     logging.info(this, "subscribing to NodeStats updates")
-    Events.subscribe(self, NodeStatsUpdateEvent)
+    context.system.eventStream.subscribe(self, classOf[NodeStatsUpdate])
   }
 
   prewarmConfig.foreach { config =>
