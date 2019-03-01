@@ -18,7 +18,6 @@
 package org.apache.openwhisk.core.containerpool.test
 
 import java.time.Instant
-
 import scala.collection.mutable
 import scala.concurrent.duration._
 import org.junit.runner.RunWith
@@ -33,8 +32,11 @@ import akka.actor.ActorSystem
 import akka.testkit.ImplicitSender
 import akka.testkit.TestKit
 import akka.testkit.TestProbe
+import common.StreamLogging
 import common.WhiskProperties
+import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.WhiskConfig
 import org.apache.openwhisk.core.connector.ActivationMessage
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.entity._
@@ -42,6 +44,7 @@ import org.apache.openwhisk.core.entity.ExecManifest.RuntimeManifest
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.connector.MessageFeed
+import scala.concurrent.Future
 
 /**
  * Behavior tests for the ContainerPool
@@ -55,6 +58,7 @@ class ContainerPoolTests
     with FlatSpecLike
     with Matchers
     with BeforeAndAfterAll
+    with StreamLogging
     with MockFactory {
 
   override def afterAll = TestKit.shutdownActorSystem(system)
@@ -125,7 +129,7 @@ class ContainerPoolTests
     (containers, factory)
   }
 
-  def poolConfig(userMemory: ByteSize) = ContainerPoolConfig(userMemory, 0.5, false)
+  def poolConfig(userMemory: ByteSize) = ContainerPoolConfig(userMemory, 0.5, false, false)
 
   behavior of "ContainerPool"
 
@@ -808,5 +812,23 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     ContainerPool.remove(pool, MemoryLimit.stdMemory) shouldBe List('first)
     pool = pool - 'first
     ContainerPool.remove(pool, MemoryLimit.stdMemory) shouldBe List('second)
+  }
+
+  class TestContainerFactory extends ContainerFactory {
+
+    /** create a new Container */
+    override def createContainer(tid: TransactionId,
+                                 name: String,
+                                 actionImage: ImageName,
+                                 userProvidedImage: Boolean,
+                                 memory: ByteSize,
+                                 cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container] =
+      ???
+
+    /** perform any initialization */
+    override def init(): Unit = ???
+
+    /** cleanup any remaining Containers; should block until complete; should ONLY be run at startup/shutdown */
+    override def cleanup(): Unit = ???
   }
 }

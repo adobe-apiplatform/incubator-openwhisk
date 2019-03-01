@@ -17,9 +17,10 @@
 
 package org.apache.openwhisk.core.invoker
 
+import akka.Done
+import akka.actor.CoordinatedShutdown
 import java.nio.charset.StandardCharsets
 import java.time.Instant
-
 import akka.actor.{ActorRefFactory, ActorSystem, Props}
 import akka.event.Logging.InfoLevel
 import akka.stream.ActorMaterializer
@@ -38,7 +39,6 @@ import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
 import org.apache.openwhisk.http.Messages
 import org.apache.openwhisk.spi.SpiLoader
 import org.apache.openwhisk.core.database.UserContext
-
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
@@ -96,7 +96,12 @@ class InvokerReactive(
           "--ulimit" -> Set("nofile=1024:1024"),
           "--pids-limit" -> Set("1024")) ++ logsProvider.containerParameters)
   containerFactory.init()
-  sys.addShutdownHook(containerFactory.cleanup())
+  //sys.addShutdownHook(containerFactory.cleanup())
+  //TODO: separate PR for changing to CoordinatedShutdown
+  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "someTaskName") { () =>
+    containerFactory.cleanup()
+    Future.successful(Done)
+  }
 
   /** Initialize needed databases */
   private val entityStore = WhiskEntityStore.datastore()
@@ -227,6 +232,7 @@ class InvokerReactive(
             .flatMap { action =>
               action.toExecutableWhiskAction match {
                 case Some(executable) =>
+                  println(s"running activation ${msg.activationId}")
                   pool ! Run(executable, msg)
                   Future.successful(())
                 case None =>
