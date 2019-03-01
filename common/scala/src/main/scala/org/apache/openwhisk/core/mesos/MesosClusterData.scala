@@ -61,7 +61,6 @@ import java.time.Instant
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.entity.UUID
-import scala.collection.mutable.ListBuffer
 import scala.concurrent.Await
 import scala.concurrent.Promise
 import scala.concurrent.TimeoutException
