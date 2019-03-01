@@ -27,6 +27,7 @@ project.archivesBaseName = "openwhisk-common"
 
 repositories {
     mavenCentral()
+    mavenLocal()
 }
 
 dependencies {
@@ -73,7 +74,7 @@ dependencies {
     }
     compile ('io.kamon:kamon-prometheus_2.12:1.1.1')
     //for mesos
-    compile 'com.adobe.api.platform.runtime:mesos-actor:0.0.17'
+    compile 'com.adobe.api.platform.runtime:mesos-actor:0.0.18'
 
     //tracing support
     compile 'io.opentracing:opentracing-api:0.31.0'
@@ -96,6 +97,9 @@ dependencies {
         exclude group: 'com.fasterxml.jackson.core'
         exclude group: 'com.fasterxml.jackson.dataformat'
     }
+    compile 'com.lightbend.akka.management:akka-management-cluster-bootstrap_2.12:0.11.0'
+    compile 'com.lightbend.akka.discovery:akka-discovery-kubernetes-api_2.12:0.11.0'
+    compile 'com.lightbend.akka.discovery:akka-discovery-marathon-api_2.12:0.11.0'
     scoverage gradle.scoverage.deps
 }
 
