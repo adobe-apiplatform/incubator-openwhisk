@@ -16,9 +16,8 @@
  */
 
 package org.apache.openwhisk.core.mesos
-import akka.actor.Actor
-import akka.actor.ActorLogging
 import akka.actor.ActorRef
+import akka.actor.ActorSystem
 import com.adobe.api.platform.runtime.mesos.MesosAgentStats
 import org.apache.openwhisk.utils.NodeStatsUpdate
 import scala.collection.concurrent.TrieMap
@@ -34,15 +33,10 @@ trait MesosData {
   def getMesosClient(): ActorRef
   def addTask(taskId: String): Unit = { tasks.put(taskId, taskId) }
   def removeTask(taskId: String): Unit = { tasks.remove(taskId) }
-}
+  def publishStats(system: ActorSystem, a: MesosAgentStats): Unit = {
+    val owStats = NodeStatsUpdate(a.stats.mapValues(a => org.apache.openwhisk.utils.NodeStats(a.mem, a.cpu, a.ports)))
+    //publish to local subscribers (ContainerPool)
+    system.eventStream.publish(owStats)
 
-class MesosClientSubscriber(isCluster: Boolean = true) extends Actor with ActorLogging {
-
-  def receive = {
-    case a: MesosAgentStats =>
-      //map the mesos type to OW type
-      val owStats = NodeStatsUpdate(a.stats.mapValues(a => org.apache.openwhisk.utils.NodeStats(a.mem, a.cpu, a.ports)))
-      //publish to local subscribers (ContainerPool)
-      context.system.eventStream.publish(owStats)
   }
 }

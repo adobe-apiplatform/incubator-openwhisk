@@ -46,10 +46,9 @@ class MesosLocalData(actorSystem: ActorSystem, mesosConfig: MesosConfig, logging
       listener = Some(statsListener)))
 
   class MesosLocalStatsListener extends Actor {
-    val subscriber = actorSystem.actorOf(Props(new MesosClientSubscriber()))
     override def receive: Receive = {
       case a: MesosAgentStats =>
-        subscriber ! a
+        publishStats(context.system, a)
       case SubscribeComplete(f) =>
         logging.info(this, s"received framework id $f")
     }

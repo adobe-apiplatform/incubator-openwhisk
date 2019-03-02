@@ -42,9 +42,6 @@ import akka.cluster.ddata.Replicator.ReadLocal
 import akka.cluster.ddata.Replicator.Subscribe
 import akka.cluster.ddata.Replicator.Update
 import akka.cluster.ddata.Replicator.WriteLocal
-import akka.cluster.pubsub.DistributedPubSub
-import akka.cluster.pubsub.DistributedPubSubMediator.Publish
-import akka.cluster.pubsub.DistributedPubSubMediator.{Subscribe => PubSubSubscribe}
 import akka.cluster.singleton.ClusterSingletonManager
 import akka.cluster.singleton.ClusterSingletonManagerSettings
 import akka.cluster.singleton.ClusterSingletonProxy
@@ -69,6 +66,7 @@ import scala.util.Try
 
 //events
 case class SetClusterFrameworkId(frameworkId: String)
+case class SetClusterStats(stats: MesosAgentStats)
 case class AddTask(taskId: String)
 case class RemoveTask(taskId: String)
 case class GetTasks(address: Address)
@@ -83,7 +81,6 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
   implicit val cluster = Cluster(actorSystem)
   implicit val ec = actorSystem.dispatcher
   implicit val log = logging
-  val mediator = DistributedPubSub(actorSystem).mediator
   val statsTopic = "agentStats"
   val dataManager = actorSystem.actorOf(Props(new MesosClusterListener(this)))
   var mesosClientActor: Option[ActorRef] = None
@@ -199,11 +196,6 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
       autoSubscribe = true, //must be true for cluster usage so when singleton client fails, new one will re-subscribe automatically
       listener = Some(statsListener))
 
-    //create the subscriber of cluster distributed events
-
-    // subscribe to the stats topic if clustered (otherwise statslistener will message directly)
-    val subscriber = actorSystem.actorOf(Props(new MesosClientSubscriber()))
-    mediator ! PubSubSubscribe(statsTopic, subscriber)
     //create the MesosClient actor as a cluster singleton
     actorSystem.actorOf(
       ClusterSingletonManager
@@ -240,7 +232,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
     override def receive: Receive = {
       case a: MesosAgentStats =>
         //publish to cluster
-        mediator ! Publish(statsTopic, a)
+        dataManager ! SetClusterStats(a)
       case SubscribeComplete(f) =>
         logging.info(this, s"received framework id $f")
     }
@@ -265,14 +257,22 @@ class MesosClusterListener(clusterData: MesosClusterData)(implicit logging: Logg
   val addr = node.selfAddress
   val replicator = DistributedData(context.system).replicator
 
-  val FrameworkIdKey = LWWRegisterKey[String]("test")
-  val MemberTasksKey = ORSetKey[MemberTask]("membertasks")
-  replicator ! Subscribe(FrameworkIdKey, self)
+  val FrameworkIdKey = LWWRegisterKey[String]("mesosFrameworkId")
+  val MemberTasksKey = ORSetKey[MemberTask]("mesosTasks")
+  //cluster stats are only published by the singleton MesosClient, so we could use DistributedPubSub,
+  //but we are already using DistributedData, so we will just use that
+  val ClusterStatsKey = LWWRegisterKey[MesosAgentStats]("mesosNodeStats")
 
+  //subscribe to changes on frameworkid and cluster stats
+  replicator ! Subscribe(FrameworkIdKey, self)
+  replicator ! Subscribe(ClusterStatsKey, self)
   override def receive: Receive = {
     //Replication events
     case SetClusterFrameworkId(frameworkId) =>
       replicator ! Update(FrameworkIdKey, LWWRegister[String](null), WriteLocal)(reg => reg.withValue(frameworkId))
+    case SetClusterStats(stats) =>
+      replicator ! Update(ClusterStatsKey, LWWRegister[MesosAgentStats](MesosAgentStats(Map.empty)), WriteLocal)(reg =>
+        reg.withValue(stats))
     case AddTask(task) =>
       replicator ! Update(MemberTasksKey, ORSet.empty[MemberTask], WriteLocal)(_ + MemberTask(addr, task))
     case RemoveTask(task) =>
@@ -287,8 +287,10 @@ class MesosClusterListener(clusterData: MesosClusterData)(implicit logging: Logg
       logging.warn(this, s"$key not found")
     case f @ GetFailure(key, _) =>
       logging.warn(this, s"$key failure $f")
-    //Change Handler
+    //Change Handlers
     case c @ Changed(FrameworkIdKey) =>
       clusterData.frameworkId = Some(c.get(FrameworkIdKey).value)
+    case c @ Changed(ClusterStatsKey) =>
+      clusterData.publishStats(context.system, c.get(ClusterStatsKey).value)
   }
 }
