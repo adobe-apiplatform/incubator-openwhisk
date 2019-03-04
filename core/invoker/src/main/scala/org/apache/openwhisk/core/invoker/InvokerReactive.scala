@@ -232,7 +232,6 @@ class InvokerReactive(
             .flatMap { action =>
               action.toExecutableWhiskAction match {
                 case Some(executable) =>
-                  println(s"running activation ${msg.activationId}")
                   pool ! Run(executable, msg)
                   Future.successful(())
                 case None =>
