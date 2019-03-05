@@ -37,6 +37,15 @@ case object Free extends WorkerState
 case class WorkerData(data: ContainerData, state: WorkerState)
 
 /**
+ * Reservation indicates resources allocated to container, but possibly not launched yet. May be negative for container stop.
+ * Pending: Allocated from this point of view, but not yet started/stopped by cluster manager.
+ * Scheduled: Started/Stopped by cluster manager, but not yet reflected in NodeStats, so must still be considered when allocating resources.
+ * */
+sealed abstract class Reservation(val size: Long)
+case class Pending(override val size: Long) extends Reservation(size)
+case class Scheduled(override val size: Long) extends Reservation(size)
+
+/**
  * A pool managing containers to run actions on.
  *
  * This pool fulfills the other half of the ContainerProxy contract. Only
@@ -73,7 +82,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
   // Otherwise actions with small memory-limits could block actions with large memory limits.
   var runBuffer = immutable.Queue.empty[Run]
   val logMessageInterval = 10.seconds
-  private var clusterReservations: Map[ActorRef, Long] = Map.empty
+  private var clusterReservations: Map[ActorRef, Reservation] = Map.empty
 
   var agentOfferHistory = Map.empty[String, NodeStats] //track the most recent offer stats per agent
   var lastlog = Instant.now()
@@ -82,18 +91,24 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
 
   var logDeadline = logInterval.fromNow
 
+  var prewarmsInitialized = false
+
+  def initPrewarms() = {
+    prewarmConfig.foreach { config =>
+      logging.info(this, s"pre-warming ${config.count} ${config.exec.kind} ${config.memoryLimit.toString}")(
+        TransactionId.invokerWarmup)
+      (1 to config.count).foreach { _ =>
+        prewarmContainer(config.exec, config.memoryLimit)
+      }
+    }
+  }
+
   //if cluster managed resources, subscribe to events
   if (poolConfig.clusterManagedResources) {
     logging.info(this, "subscribing to NodeStats updates")
     context.system.eventStream.subscribe(self, classOf[NodeStatsUpdate])
-  }
-
-  prewarmConfig.foreach { config =>
-    logging.info(this, s"pre-warming ${config.count} ${config.exec.kind} ${config.memoryLimit.toString}")(
-      TransactionId.invokerWarmup)
-    (1 to config.count).foreach { _ =>
-      prewarmContainer(config.exec, config.memoryLimit)
-    }
+  } else {
+    initPrewarms()
   }
 
   def logContainerStart(r: Run, containerState: String, activeActivations: Int, container: Option[Container]): Unit = {
@@ -109,7 +124,9 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     if (poolConfig.clusterManagedResources) {
       logging.info(
         this,
-        s"node stats ${agentOfferHistory} reserved ${clusterReservations.size} containers ${reservedSize}MB ${reservedStartCount} starts ${reservedStopCount} stops")
+        s"node stats ${agentOfferHistory} reserved ${clusterReservations.size} containers ${reservedSize}MB " +
+          s"${reservedStartCount} pending starts ${reservedStopCount} pending stops " +
+          s"${scheduledStartCount} scheduled starts ${scheduledStopCount} scheduled stops")
     }
   }
 
@@ -162,7 +179,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
                     })
                   .map { a =>
                     //decrease the reserved (not yet stopped container) memory tracker
-                    clusterReservations = clusterReservations + (a -> -r.action.limits.memory.megabytes)
+                    addReservation(a, -r.action.limits.memory.megabytes)
                     removeContainer(a)
                   }
                   // If the list had at least one entry, enough containers were removed to start the new container. After
@@ -267,13 +284,13 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     // Container is prewarmed and ready to take work
     case NeedWork(data: PreWarmedData) =>
       //stop tracking via reserved
-      clusterReservations = clusterReservations - sender()
+      releaseReservation(sender())
       prewarmedPool = prewarmedPool + (sender() -> data)
 
     // Container got removed
     case ContainerRemoved =>
       //stop tracking via reserved
-      clusterReservations = clusterReservations - sender()
+      releaseReservation(sender())
 
       // if container was in free pool, it may have been processing (but under capacity),
       // so there is capacity to accept another job request
@@ -296,17 +313,37 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     // 4. The container is paused, and being removed to make room for new containers
     // Update the free/busy lists but no message is sent to the feed since there is no change in capacity yet
     case RescheduleJob =>
-      clusterReservations = clusterReservations - sender()
+      releaseReservation(sender())
       freePool = freePool - sender()
       busyPool = busyPool - sender()
 
     case NodeStatsUpdate(stats) =>
-      logging.info(this, s"node stats ${stats} reserved ${clusterReservations.size} containers ${reservedSize}MB")
+      //clear Scheduled reservations (leave Pending) IFF stats are changing (in case of residual stats that have not accommodated the reservations' impacts)
+      if (agentOfferHistory != stats) {
+        clusterReservations = clusterReservations.collect { case (key, p: Pending) => (key, p) }
+      }
+      logging.info(
+        this,
+        s"received node stats ${stats} reserved/scheduled ${clusterReservations.size} containers ${reservedSize}MB")
       agentOfferHistory = stats
+      if (!prewarmsInitialized) {
+        prewarmsInitialized = true
+        logging.info(this, "initializing prewarmpool after stats recevied")
+        initPrewarms()
+      }
 
     case ContainerStarted => //only used for receiving post-start from cold container
       //stop tracking via reserved
-      clusterReservations = clusterReservations - sender()
+      releaseReservation(sender())
+  }
+
+  def addReservation(ref: ActorRef, size: Long): Unit = {
+    clusterReservations = clusterReservations + (ref -> Pending(size))
+  }
+  def releaseReservation(ref: ActorRef): Unit = {
+    clusterReservations.get(ref).foreach { r =>
+      clusterReservations = clusterReservations + (ref -> Scheduled(r.size))
+    }
   }
 
   /** Creates a new container and updates state accordingly. */
@@ -314,7 +351,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     val ref = childFactory(context)
     val data = MemoryData(memoryLimit)
     //increase the reserved (not yet started container) memory tracker
-    clusterReservations = clusterReservations + (ref -> memoryLimit.toMB)
+    addReservation(ref, memoryLimit.toMB)
     freePool = freePool + (ref -> data)
     ref -> data
   }
@@ -327,7 +364,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
       val ref = childFactory(context)
       ref ! Start(exec, memoryLimit)
       //increase the reserved (not yet started container) memory tracker
-      clusterReservations = clusterReservations + (ref -> memoryLimit.toMB)
+      addReservation(ref, memoryLimit.toMB)
     } else {
       logging.warn(this, "cannot create additional prewarm")
     }
@@ -363,7 +400,6 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
 
   /** Removes a container and updates state accordingly. */
   def removeContainer(toDelete: ActorRef) = {
-    println("### deleting container...")
     toDelete ! Remove
     freePool = freePool - toDelete
     busyPool = busyPool - toDelete
@@ -387,16 +423,30 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     }
   }
 
-  def reservedSize = clusterReservations.foldLeft[Long](0)(_ + _._2)
-  def reservedStartCount = clusterReservations.count(_._2 >= 0)
-  def reservedStopCount = clusterReservations.count(_._2 < 0)
+  def reservedSize = clusterReservations.values.collect { case p: Pending => p.size }.sum
+  def reservedStartCount = clusterReservations.values.count {
+    case p: Pending => p.size >= 0
+    case _          => false
+  }
+  def reservedStopCount = clusterReservations.values.count {
+    case p: Pending => p.size < 0
+    case _          => false
+  }
+  def scheduledStartCount = clusterReservations.values.count {
+    case p: Scheduled => p.size >= 0
+    case _            => false
+  }
+  def scheduledStopCount = clusterReservations.values.count {
+    case p: Scheduled => p.size < 0
+    case _            => false
+  }
 
   private var resourcesAvailable
     : Boolean = false //track whenever there is a switch from cluster resources being available to not being available
 
   def canLaunch(memory: ByteSize)(implicit tid: TransactionId): Boolean = {
     //make sure there is at least one offer > memory + buffer
-    val canLaunch = hasPotentialMemoryCapacity(memory.toMB, clusterReservations.values.toList)
+    val canLaunch = hasPotentialMemoryCapacity(memory.toMB, clusterReservations.values.map(_.size).toList) //consider all reservations blocking till they are removed during NodeStatsUpdate
     //log only when changing value
     if (canLaunch != resourcesAvailable) {
       if (canLaunch) {

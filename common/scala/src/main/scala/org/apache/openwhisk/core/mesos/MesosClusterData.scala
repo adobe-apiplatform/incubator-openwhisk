@@ -105,9 +105,6 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
         Props(new Actor {
           var cleanedAddresses
             : Map[Address, Instant] = Map.empty //track addresses and expiration time (will prune periodically to avoid growing the map)
-          override def preStart(): Unit = {
-            cluster.subscribe(self, classOf[MemberEvent])
-          }
           case object PruneCleaned
           //periodically prune cleaned addresses
           context.system.scheduler.schedule(10.seconds, 300.seconds, self, PruneCleaned)
@@ -122,11 +119,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
             case PruneCleaned =>
               val now = Instant.now()
               cleanedAddresses = cleanedAddresses.filter(_._2.isBefore(now))
-            case m =>
-              logging.info(this, s"unknown message $m")
           }
-
-          def cleanOnce = {}
         }),
         terminationMessage = PoisonPill,
         settings = ClusterSingletonManagerSettings(actorSystem)),
@@ -151,7 +144,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
       case UnreachableMember(member) =>
         cleaner ! CleanTasks(member.address)
       case m =>
-        logging.info(this, s"unknown message $m")
+        logging.debug(this, s"unknown message $m")
     }
   }))
 

@@ -74,7 +74,7 @@ dependencies {
     }
     compile ('io.kamon:kamon-prometheus_2.12:1.1.1')
     //for mesos
-    compile 'com.adobe.api.platform.runtime:mesos-actor:0.0.18'
+    compile 'com.adobe.api.platform.runtime:mesos-actor:0.0.19'
 
     //tracing support
     compile 'io.opentracing:opentracing-api:0.31.0'
