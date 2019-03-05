@@ -126,7 +126,7 @@ class ContainerPoolTests
     (containers, factory)
   }
 
-  def poolConfig(userMemory: ByteSize) = ContainerPoolConfig(userMemory, 0.5, false)
+  def poolConfig(userMemory: ByteSize) = ContainerPoolConfig(userMemory, 0.5, false, false)
 
   behavior of "ContainerPool"
 
@@ -815,4 +815,5 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     pool = pool - 'first
     ContainerPool.remove(pool, MemoryLimit.STD_MEMORY) shouldBe List('second)
   }
+
 }

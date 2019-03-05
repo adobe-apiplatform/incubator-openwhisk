@@ -147,6 +147,9 @@ class ContainerProxyTests
   def run(machine: ActorRef, currentState: ContainerState) = {
     machine ! Run(action, message)
     expectMsg(Transition(machine, currentState, Running))
+    if (currentState == Uninitialized) {
+      expectMsg(ContainerStarted)
+    }
     expectWarmed(invocationNamespace.name, action)
     expectMsg(Transition(machine, Running, Ready))
   }
@@ -271,7 +274,7 @@ class ContainerProxyTests
     (transid: TransactionId, activation: WhiskActivation, context: UserContext) =>
       Future.successful(())
   }
-  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false)
+  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, false)
   val filterEnvVar = (k: String) => Character.isUpperCase(k.charAt(0))
 
   behavior of "ContainerProxy"
@@ -539,6 +542,7 @@ class ContainerProxyTests
 
     machine ! Run(noLogsAction, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectWarmed(invocationNamespace.name, noLogsAction)
     expectMsg(Transition(machine, Running, Ready))
 
@@ -939,6 +943,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -987,6 +992,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -1025,6 +1031,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -1062,6 +1069,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -1193,6 +1201,7 @@ class ContainerProxyTests
     // Start running the action
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
 
     // Schedule the container to be removed
     machine ! Remove
