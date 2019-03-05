@@ -319,9 +319,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
 
     case NodeStatsUpdate(stats) =>
       //clear Scheduled reservations (leave Pending) IFF stats are changing (in case of residual stats that have not accommodated the reservations' impacts)
-      if (agentOfferHistory != stats) {
-        clusterReservations = clusterReservations.collect { case (key, p: Pending) => (key, p) }
-      }
+      pruneReserved(stats)
       logging.info(
         this,
         s"received node stats ${stats} reserved/scheduled ${clusterReservations.size} containers ${reservedSize}MB")
@@ -343,6 +341,12 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
   def releaseReservation(ref: ActorRef): Unit = {
     clusterReservations.get(ref).foreach { r =>
       clusterReservations = clusterReservations + (ref -> Scheduled(r.size))
+    }
+  }
+  def pruneReserved(newStats: Map[String, NodeStats]) = {
+    //don't prune until all nodes have updated stats
+    if (agentOfferHistory != newStats && agentOfferHistory.keySet.subsetOf(newStats.keySet)) {
+      clusterReservations = clusterReservations.collect { case (key, p: Pending) => (key, p) }
     }
   }
 
