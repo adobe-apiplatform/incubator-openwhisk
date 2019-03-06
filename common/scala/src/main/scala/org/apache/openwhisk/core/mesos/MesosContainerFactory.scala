@@ -235,7 +235,7 @@ object MesosContainerFactory {
   val counter = new Counter()
   val startTime = Instant.now.getEpochSecond
   private def taskIdGenerator(instance: InvokerInstanceId): String = {
-    s"whisk-${instance.toInt}-${counter.next()}"
+    s"whisk-${instance.toInt}-${startTime}-${counter.next()}"
   }
   protected[mesos] def destroy(
     mesosClientActor: ActorRef,
