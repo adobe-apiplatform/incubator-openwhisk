@@ -127,7 +127,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     if (poolConfig.clusterManagedResources) {
       logging.info(
         this,
-        s"node stats ${clusterActionHostStats} reserved ${clusterReservations.size} containers ${reservedSize}MB " +
+        s"node stats ${clusterActionHostStats} reserved ${clusterReservations.size} (of max ${poolConfig.clusterManagedResourceMaxStarts}) containers ${reservedSize}MB " +
           s"${reservedStartCount} pending starts ${reservedStopCount} pending stops " +
           s"${scheduledStartCount} scheduled starts ${scheduledStopCount} scheduled stops")
     }
@@ -165,9 +165,13 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
                 if (hasPoolSpaceFor(poolConfig, busyPool ++ freePool, r.action.limits.memory.megabytes.MB)) {
                   takePrewarmContainer(r.action)
                     .map(container => (container, "prewarmed"))
-                    .orElse(Some(createContainer(r.action.limits.memory.megabytes.MB), "cold"))
+                    .orElse {
+                      if (allowMoreStarts(poolConfig)) {
+                        Some(createContainer(r.action.limits.memory.megabytes.MB), "cold")
+                      } else { None }
+                    }
                 } else None)
-              .orElse(
+              .orElse(if (allowMoreStarts(poolConfig)) {
                 // Remove a container and create a new one for the given job
                 ContainerPool
                 // Only free up the amount, that is really needed to free up
@@ -189,8 +193,8 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
                   .map(_ =>
                     takePrewarmContainer(r.action)
                       .map(container => (container, "recreatedPrewarm"))
-                      .getOrElse(createContainer(r.action.limits.memory.megabytes.MB), "recreated")))
-
+                      .getOrElse(createContainer(r.action.limits.memory.megabytes.MB), "recreated"))
+              } else { None })
           } else None
 
         createdContainer match {
@@ -240,7 +244,8 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
                   s"maxContainersMemory ${poolConfig.userMemory.toMB} MB, " +
                   s"userNamespace: ${r.msg.user.namespace.name}, action: ${r.action}, " +
                   s"needed memory: ${r.action.limits.memory.megabytes} MB, " +
-                  s"waiting messages: ${runBuffer.size}")(r.msg.transid)
+                  s"waiting messages: ${runBuffer.size}, " +
+                  s"reservations: ${clusterReservations.size}")(r.msg.transid)
               MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESCHEDULED_ACTIVATION)
               Some(logMessageInterval.fromNow)
             } else {
@@ -354,6 +359,9 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
       clusterReservations = clusterReservations.collect { case (key, p: Pending) => (key, p) }
     }
   }
+  def allowMoreStarts(config: ContainerPoolConfig) =
+    !config.clusterManagedResources || clusterReservations
+      .count({ case (_, state) => state.size > 0 }) < config.clusterManagedResourceMaxStarts //only positive reservations affect ability to start
 
   /** Creates a new container and updates state accordingly. */
   def createContainer(memoryLimit: ByteSize): (ActorRef, ContainerData) = {

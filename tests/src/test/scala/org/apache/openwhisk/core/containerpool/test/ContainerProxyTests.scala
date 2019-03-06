@@ -274,7 +274,7 @@ class ContainerProxyTests
     (transid: TransactionId, activation: WhiskActivation, context: UserContext) =>
       Future.successful(())
   }
-  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, false)
+  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, false, 10)
   val filterEnvVar = (k: String) => Character.isUpperCase(k.charAt(0))
 
   behavior of "ContainerProxy"
