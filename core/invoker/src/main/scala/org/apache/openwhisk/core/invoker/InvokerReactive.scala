@@ -96,9 +96,8 @@ class InvokerReactive(
           "--ulimit" -> Set("nofile=1024:1024"),
           "--pids-limit" -> Set("1024")) ++ logsProvider.containerParameters)
   containerFactory.init()
-  //sys.addShutdownHook(containerFactory.cleanup())
-  //TODO: separate PR for changing to CoordinatedShutdown
-  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "someTaskName") { () =>
+
+  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "invokerCleanup") { () =>
     containerFactory.cleanup()
     Future.successful(Done)
   }

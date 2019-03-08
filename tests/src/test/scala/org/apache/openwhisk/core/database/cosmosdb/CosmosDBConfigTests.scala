@@ -20,7 +20,7 @@ import com.typesafe.config.ConfigFactory
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
-import com.microsoft.azure.cosmosdb.{ConnectionPolicy => JConnectionPolicy}
+import com.microsoft.azure.cosmosdb.{ConnectionMode, ConnectionPolicy => JConnectionPolicy}
 
 import scala.collection.JavaConverters._
 
@@ -66,7 +66,9 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
       | }
          """.stripMargin).withFallback(globalConfig)
     val cosmos = CosmosDBConfig(config, "WhiskAuth")
-    cosmos should matchPattern { case CosmosDBConfig("http://localhost", "foo", "openwhisk", _, _, _, _) => }
+    cosmos.endpoint shouldBe "http://localhost"
+    cosmos.key shouldBe "foo"
+    cosmos.db shouldBe "openwhisk"
   }
 
   it should "work with extended config" in {
@@ -81,7 +83,9 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
       | }
          """.stripMargin).withFallback(globalConfig)
     val cosmos = CosmosDBConfig(config, "WhiskAuth")
-    cosmos should matchPattern { case CosmosDBConfig("http://localhost", "foo", "openwhisk", _, _, _, _) => }
+    cosmos.endpoint shouldBe "http://localhost"
+    cosmos.key shouldBe "foo"
+    cosmos.db shouldBe "openwhisk"
 
     cosmos.connectionPolicy.maxPoolSize shouldBe 42
     val policy = cosmos.connectionPolicy.asJava
@@ -108,17 +112,21 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
       |        connection-policy {
       |           using-multiple-write-locations = true
       |           preferred-locations = [a, b]
+      |           connection-mode = Direct
       |        }
       |     }
       |  }
       | }
          """.stripMargin).withFallback(globalConfig)
     val cosmos = CosmosDBConfig(config, "WhiskAuth")
-    cosmos should matchPattern { case CosmosDBConfig("http://localhost", "foo", "openwhisk", _, _, _, _) => }
+    cosmos.endpoint shouldBe "http://localhost"
+    cosmos.key shouldBe "foo"
+    cosmos.db shouldBe "openwhisk"
 
     val policy = cosmos.connectionPolicy.asJava
     policy.isUsingMultipleWriteLocations shouldBe true
     policy.getMaxPoolSize shouldBe 42
+    policy.getConnectionMode shouldBe ConnectionMode.Direct
     policy.getPreferredLocations.asScala.toSeq should contain only ("a", "b")
     policy.getRetryOptions.getMaxRetryWaitTimeInSeconds shouldBe 120
   }

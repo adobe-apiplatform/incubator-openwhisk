@@ -34,9 +34,7 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import common.StreamLogging
 import common.WhiskProperties
-import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
-import org.apache.openwhisk.core.WhiskConfig
 import org.apache.openwhisk.core.connector.ActivationMessage
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.entity._
@@ -44,7 +42,6 @@ import org.apache.openwhisk.core.entity.ExecManifest.RuntimeManifest
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.connector.MessageFeed
-import scala.concurrent.Future
 
 /**
  * Behavior tests for the ContainerPool
@@ -814,21 +811,4 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     ContainerPool.remove(pool, MemoryLimit.stdMemory) shouldBe List('second)
   }
 
-  class TestContainerFactory extends ContainerFactory {
-
-    /** create a new Container */
-    override def createContainer(tid: TransactionId,
-                                 name: String,
-                                 actionImage: ImageName,
-                                 userProvidedImage: Boolean,
-                                 memory: ByteSize,
-                                 cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container] =
-      ???
-
-    /** perform any initialization */
-    override def init(): Unit = ???
-
-    /** cleanup any remaining Containers; should block until complete; should ONLY be run at startup/shutdown */
-    override def cleanup(): Unit = ???
-  }
 }

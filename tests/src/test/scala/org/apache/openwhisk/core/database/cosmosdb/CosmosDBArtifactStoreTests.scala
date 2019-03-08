@@ -17,24 +17,39 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
+import com.typesafe.config.ConfigFactory
 import io.netty.util.ResourceLeakDetector
 import io.netty.util.ResourceLeakDetector.Level
-import org.junit.runner.RunWith
-import org.scalatest.{FlatSpec, Pending}
-import org.scalatest.junit.JUnitRunner
-import org.apache.openwhisk.core.entity.size._
+import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.database.DocumentSerializer
+import org.apache.openwhisk.core.database.memory.MemoryAttachmentStoreProvider
 import org.apache.openwhisk.core.database.test.behavior.ArtifactStoreBehavior
+import org.apache.openwhisk.core.entity.WhiskEntityQueries.TOP
+import org.apache.openwhisk.core.entity.size._
+import org.apache.openwhisk.core.entity.{
+  DocumentReader,
+  WhiskActivation,
+  WhiskDocumentReader,
+  WhiskEntity,
+  WhiskEntityJsonFormat,
+  WhiskPackage
+}
+import org.junit.runner.RunWith
+import org.scalatest.junit.JUnitRunner
+import org.scalatest.FlatSpec
+import spray.json.JsString
+import org.apache.openwhisk.core.entity.size._
+import org.junit.runner.RunWith
+import org.scalatest.FlatSpec
+import org.scalatest.junit.JUnitRunner
+
+import scala.reflect.ClassTag
 
 @RunWith(classOf[JUnitRunner])
 class CosmosDBArtifactStoreTests extends FlatSpec with CosmosDBStoreBehaviorBase with ArtifactStoreBehavior {
   override protected def maxAttachmentSizeWithoutAttachmentStore = 1.MB
 
   private var initialLevel: Level = _
-  // See https://github.com/apache/incubator-openwhisk/issues/4286
-  private val ignoredTests = Set(
-    "CosmosDBArtifactStore attachments should fail on reading with old non inlined attachment",
-    "CosmosDBArtifactStore attachments should work on reading with old inlined attachment",
-    "CosmosDBArtifactStore attachments should put and read large attachment")
 
   override protected def beforeAll(): Unit = {
     RecordingLeakDetectorFactory.register()
@@ -42,6 +57,9 @@ class CosmosDBArtifactStoreTests extends FlatSpec with CosmosDBStoreBehaviorBase
     ResourceLeakDetector.setLevel(Level.PARANOID)
     super.beforeAll()
   }
+
+  override protected def getAttachmentStore[D <: DocumentSerializer: ClassTag]() =
+    Some(MemoryAttachmentStoreProvider.makeStore[D]())
 
   override def afterAll(): Unit = {
     super.afterAll()
@@ -53,15 +71,6 @@ class CosmosDBArtifactStoreTests extends FlatSpec with CosmosDBStoreBehaviorBase
     withClue("Recorded leak count should be zero") {
       RecordingLeakDetectorFactory.counter.cur shouldBe 0
     }
-  }
-
-  override protected def withFixture(test: NoArgTest) = {
-    val outcome = super.withFixture(test)
-    val result = if (outcome.isFailed && ignoredTests.contains(test.name)) {
-      println(s"Ignoring failed test ${test.name}")
-      Pending
-    } else outcome
-    result
   }
 
   behavior of "CosmosDB Setup"
@@ -79,5 +88,61 @@ class CosmosDBArtifactStoreTests extends FlatSpec with CosmosDBStoreBehaviorBase
         offer.getThroughput shouldBe storeConfig.throughput
       }
     }
+  }
+
+  it should "have clusterId set" in {
+    implicit val tid: TransactionId = TransactionId.testing
+    implicit val docReader: DocumentReader = WhiskDocumentReader
+    implicit val format = WhiskEntityJsonFormat
+    val conf = ConfigFactory.parseString(s"""
+      | whisk.cosmosdb {
+      |  collections {
+      |     WhiskEntity = {
+      |        cluster-id = "foo"
+      |     }
+      |  }
+      | }
+         """.stripMargin).withFallback(ConfigFactory.load())
+
+    val cosmosDBConfig = CosmosDBConfig(conf, "WhiskEntity")
+    cosmosDBConfig.clusterId shouldBe Some("foo")
+
+    val testConfig = cosmosDBConfig.copy(db = config.db)
+    val store = CosmosDBArtifactStoreProvider.makeArtifactStore[WhiskEntity](testConfig, None)
+
+    val pkg = WhiskPackage(newNS(), aname())
+    val info = put(store, pkg)
+
+    val js = store.getRaw(info.id).futureValue
+    js.get.fields(CosmosDBConstants.clusterId) shouldBe JsString("foo")
+  }
+
+  behavior of "CosmosDB query debug"
+
+  it should "log query metrics in debug flow" in {
+    val debugTid = TransactionId("42", extraLogging = true)
+    val tid = TransactionId("42")
+    val ns = newNS()
+    val activations = (1000 until 1100 by 10).map(newActivation(ns.asString, "testact", _))
+    activations foreach (put(activationStore, _)(tid))
+
+    val entityPath = s"${ns.asString}/testact"
+    stream.reset()
+    query[WhiskActivation](
+      activationStore,
+      WhiskActivation.filtersView.name,
+      List(entityPath, 1050),
+      List(entityPath, TOP, TOP))(tid)
+
+    stream.toString should not include ("[QueryMetricsEnabled]")
+    stream.reset()
+
+    query[WhiskActivation](
+      activationStore,
+      WhiskActivation.filtersView.name,
+      List(entityPath, 1050),
+      List(entityPath, TOP, TOP))(debugTid)
+    stream.toString should include("[QueryMetricsEnabled]")
+
   }
 }
