@@ -18,6 +18,7 @@
 package org.apache.openwhisk.core.containerpool
 
 import akka.actor.{Actor, ActorRef, ActorRefFactory, Props}
+import java.time.Instant
 import org.apache.openwhisk.common.{AkkaLogging, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.connector.MessageFeed
 import org.apache.openwhisk.core.entity._
@@ -85,6 +86,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
   /** cluster state tracking */
   private var clusterReservations: Map[ActorRef, Reservation] = Map.empty
   var clusterActionHostStats = Map.empty[String, NodeStats] //track the most recent node stats per action host (host that is able to run action containers)
+  var clusterActionHostsCount = 0
 
   var prewarmsInitialized = false
 
@@ -177,8 +179,8 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
                     })
                   .map { a =>
                     //decrease the reserved (not yet stopped container) memory tracker
-                    addReservation(a, -r.action.limits.memory.megabytes)
-                    removeContainer(a)
+                    addReservation(a._1, -r.action.limits.memory.megabytes)
+                    removeContainer(a._1)
                   }
                   // If the list had at least one entry, enough containers were removed to start the new container. After
                   // removing the containers, we are not interested anymore in the containers that have been removed.
@@ -324,6 +326,8 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     case NodeStatsUpdate(stats) =>
       //clear Scheduled reservations (leave Pending) IFF stats are changing (in case of residual stats that have not accommodated the reservations' impacts)
       pruneReserved(stats)
+      //clear sufficiently idled containers once cluster hosts start dropping out of nodestats below threshold in config
+      pruneFreePool(stats.size)
       logging.info(
         this,
         s"received node stats ${stats} reserved/scheduled ${clusterReservations.size} containers ${reservedSize}MB")
@@ -353,6 +357,39 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     //don't prune until all nodes have updated stats
     if (clusterActionHostStats != newStats && clusterActionHostStats.keySet.subsetOf(newStats.keySet)) {
       clusterReservations = clusterReservations.collect { case (key, p: Pending) => (key, p) }
+    }
+  }
+
+  /** With each update to NodeStats, also prune free pool to free up idles once we exceed the threshold */
+  def pruneFreePool(newCount: Int) = {
+    if (newCount > clusterActionHostsCount) {
+      clusterActionHostsCount = newCount
+    }
+    if (newCount == 1 || newCount < poolConfig.clusterManagedCapacityMonitor.idlePruneUseRatio * clusterActionHostsCount) {
+      //skip pruning if container stops are in progress which might also free resources
+      val stopsInProgress = scheduledStopCount
+      if (stopsInProgress > 0) {
+        logging.info(
+          this,
+          s"cluster free capacity reached ${newCount} of ${clusterActionHostsCount}; ${stopsInProgress} stops already in progress")
+      } else {
+        //free in chunks
+        val lastUsedMax = Instant.now().minusSeconds(poolConfig.clusterManagedCapacityMonitor.idleTimeout.toSeconds)
+
+        val freeSize = poolConfig.clusterManagedCapacityMonitor.idleRemoveSize
+        logging.info(
+          this,
+          s"cluster free capacity reached ${newCount} of ${clusterActionHostsCount}; attempting prune of ${freeSize}MB in idle containers")
+        ContainerPool
+        //free as much as possible, up to freeSize
+          .remove(freePool, Math.min(freeSize.toMB, memoryConsumptionOf(freePool)).MB, lastUsedMax, true)
+          .map { a =>
+            logging.info(this, "freeing idle ")
+            //decrease the reserved (not yet stopped container) memory tracker
+            addReservation(a._1, -a._2.toMB)
+            removeContainer(a._1)
+          }
+      }
     }
   }
   def allowMoreStarts(config: ContainerPoolConfig) =
@@ -571,17 +608,23 @@ object ContainerPool {
    *
    * @param pool a map of all free containers in the pool
    * @param memory the amount of memory that has to be freed up
-   * @return a list of containers to be removed iff found
+   * @param anyAmount free up any amount up to memory size
+   * @param lastUsedMax only consider idles last used before lastUsedMax
+   * @return a map of containers->ByteSize to be removed iff found
    */
-  protected[containerpool] def remove[A](pool: Map[A, ContainerData], memory: ByteSize): List[A] = {
+  protected[containerpool] def remove[A](pool: Map[A, ContainerData],
+                                         memory: ByteSize,
+                                         lastUsedMax: Instant = Instant.now(),
+                                         anyAmount: Boolean = false): Map[A, ByteSize] = {
+
     // Try to find a Free container that does NOT have any active activations AND is initialized with any OTHER action
     val freeContainers = pool.collect {
       // Only warm containers will be removed. Prewarmed containers will stay always.
-      case (ref, w: WarmedData) if w.activeActivationCount == 0 =>
+      case (ref, w: WarmedData) if w.activeActivationCount == 0 && w.lastUsed.isBefore(lastUsedMax) =>
         ref -> w
     }
 
-    if (memory > 0.B && freeContainers.nonEmpty && memoryConsumptionOf(freeContainers) >= memory.toMB) {
+    if (memory > 0.B && freeContainers.nonEmpty && (anyAmount || memoryConsumptionOf(freeContainers) >= memory.toMB)) {
       // Remove the oldest container if:
       // - there is more memory required
       // - there are still containers that can be removed
@@ -589,13 +632,17 @@ object ContainerPool {
       val (ref, data) = freeContainers.minBy(_._2.lastUsed)
       // Catch exception if remaining memory will be negative
       val remainingMemory = Try(memory - data.memoryLimit).getOrElse(0.B)
-      List(ref) ++ remove(freeContainers - ref, remainingMemory)
+      Map(ref -> data.action.limits.memory.megabytes.MB) ++ remove(
+        freeContainers - ref,
+        remainingMemory,
+        lastUsedMax,
+        anyAmount)
     } else {
       // If this is the first call: All containers are in use currently, or there is more memory needed than
       // containers can be removed.
       // Or, if this is one of the recursions: Enough containers are found to get the memory, that is
       // necessary. -> Abort recursion
-      List.empty
+      Map.empty
     }
   }
 
