@@ -27,6 +27,7 @@ import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import akka.util.Timeout
 import com.adobe.api.platform.runtime.mesos.Bridge
+import com.adobe.api.platform.runtime.mesos.CapacityFailure
 import com.adobe.api.platform.runtime.mesos.CommandDef
 import com.adobe.api.platform.runtime.mesos.Constraint
 import com.adobe.api.platform.runtime.mesos.Host
@@ -44,6 +45,7 @@ import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.LoggingMarkers
 import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.containerpool.ClusterResourceError
 import org.apache.openwhisk.core.containerpool.Container
 import org.apache.openwhisk.core.containerpool.ContainerAddress
 import org.apache.openwhisk.core.containerpool.ContainerId
@@ -124,6 +126,10 @@ object MesosTask {
       mesosClientActor.ask(SubmitTask(task))(taskLaunchTimeout).mapTo[Running]
 
     launched
+      .recoverWith {
+        case c: CapacityFailure =>
+          Future.failed(ClusterResourceError(memory, c.remainingResources.maxBy(_._1)._1.toLong.MB))
+      }
       .andThen {
         case Success(taskDetails) =>
           transid.finished(this, start, s"launched task ${taskId} at ${taskDetails.hostname}:${taskDetails
@@ -133,6 +139,9 @@ object MesosTask {
           MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(LAUNCH_CMD))
           //kill the task whose launch timed out
           destroy(mesosClientActor, mesosConfig, mesosData, taskId)
+        case Failure(c: ClusterResourceError) =>
+          transid.failed(this, start, s"task launch failed due to resource exhaustion", ErrorLevel)
+        //do nothing (mesos-actor already cancelled the submitted task); ContainerPool will retry
         case Failure(t) =>
           //kill the task whose launch timed out
           destroy(mesosClientActor, mesosConfig, mesosData, taskId)
