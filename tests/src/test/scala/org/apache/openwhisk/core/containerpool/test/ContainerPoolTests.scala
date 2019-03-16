@@ -130,6 +130,7 @@ class ContainerPoolTests
   def poolConfig(userMemory: ByteSize) =
     ContainerPoolConfig(userMemory, 0.5, false, false, 10, ClusterManagedCapacityMonitor(0.5, 10.seconds, 1024.B))
 
+  val instanceId = InvokerInstanceId(0, userMemory = 1024.MB)
   behavior of "ContainerPool"
 
   /*
@@ -142,7 +143,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
     // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
 
     pool ! runMessage
     containers(0).expectMsg(runMessage)
@@ -157,7 +159,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
     // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
 
     pool ! runMessage
     containers(0).expectMsg(runMessage)
@@ -173,7 +176,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     // Note that the container doesn't respond, thus it's not free to take work
@@ -187,7 +191,7 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 slot
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
+    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     containers(0).send(pool, NeedWork(warmedData()))
@@ -203,7 +207,7 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with slots for 2 actions with default memory limit.
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(512.MB), feed.ref))
+    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(512.MB), feed.ref))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     pool ! runMessageDifferentAction // 2 * stdMemory taken -> full
@@ -225,7 +229,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 active slot but 2 slots in total
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
 
     // Run the first container
     pool ! runMessage
@@ -251,7 +256,7 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 slot
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
+    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     containers(0).send(pool, NeedWork(warmedData()))
@@ -266,7 +271,7 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 slot
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
+    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     containers(0).send(pool, RescheduleJob) // emulate container failure ...
@@ -279,7 +284,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
 
     // Start first action
     pool ! runMessage // 1 * stdMemory taken
@@ -313,7 +319,7 @@ class ContainerPoolTests
     val pool =
       system.actorOf(
         ContainerPool
-          .props(factory, poolConfig(0.MB), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
+          .props(instanceId, factory, poolConfig(0.MB), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
     containers(0).expectMsg(Start(exec, memoryLimit))
   }
 
@@ -324,7 +330,12 @@ class ContainerPoolTests
     val pool =
       system.actorOf(
         ContainerPool
-          .props(factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
+          .props(
+            instanceId,
+            factory,
+            poolConfig(MemoryLimit.STD_MEMORY),
+            feed.ref,
+            List(PrewarmingConfig(1, exec, memoryLimit))))
     containers(0).expectMsg(Start(exec, memoryLimit))
     containers(0).send(pool, NeedWork(preWarmedData(exec.kind)))
     pool ! runMessage
@@ -340,6 +351,7 @@ class ContainerPoolTests
     val pool = system.actorOf(
       ContainerPool
         .props(
+          instanceId,
           factory,
           poolConfig(MemoryLimit.STD_MEMORY),
           feed.ref,
@@ -360,6 +372,7 @@ class ContainerPoolTests
       system.actorOf(
         ContainerPool
           .props(
+            instanceId,
             factory,
             poolConfig(MemoryLimit.STD_MEMORY),
             feed.ref,
@@ -377,7 +390,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
 
     // container0 is created and used
     pool ! runMessage
@@ -407,7 +421,7 @@ class ContainerPoolTests
 
     // Pool with 512 MB usermemory
     val pool =
-      system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
 
     // Send action that blocks the pool
     pool ! runMessageLarge
@@ -439,7 +453,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // Pool with 512 MB usermemory
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
 
     // Send 4 actions to the ContainerPool (Action 0, Action 2 and Action 3 with each 265 MB and Action 1 with 512 MB)
     pool ! runMessage
@@ -493,7 +508,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
 
     // container0 is created and used
     pool ! runMessageConcurrent
@@ -517,7 +533,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
 
     // container0 is created and used
     pool ! runMessageConcurrent
@@ -533,7 +550,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool = system.actorOf(ContainerPool.props(factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool =
+      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
 
     // container0 is created and used
     pool ! runMessageConcurrent
