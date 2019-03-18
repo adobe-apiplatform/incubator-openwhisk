@@ -155,7 +155,6 @@ class MesosContainerFactory(config: WhiskConfig,
       mesosConfig.constraints
     }
     val taskId = taskIdGenerator(instance)
-    mesosData.addTask(taskId)
 
     MesosTask.create(
       mesosClientActor,

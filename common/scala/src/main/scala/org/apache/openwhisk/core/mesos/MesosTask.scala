@@ -121,7 +121,7 @@ object MesosTask {
       LoggingMarkers.INVOKER_MESOS_CMD(LAUNCH_CMD),
       s"launching mesos task for taskid $taskId (image:$image, mem: $mesosRam, cpu: $mesosCpuShares) (timeout: $taskLaunchTimeout)",
       logLevel = InfoLevel)
-
+    mesosData.addTask(taskId)
     val launched: Future[Running] =
       mesosClientActor.ask(SubmitTask(task))(taskLaunchTimeout).mapTo[Running]
 
@@ -135,14 +135,17 @@ object MesosTask {
           transid.finished(this, start, s"launched task ${taskId} at ${taskDetails.hostname}:${taskDetails
             .hostports(0)}", logLevel = InfoLevel)
         case Failure(ate: AskTimeoutException) =>
+          mesosData.removeTask(taskId)
           transid.failed(this, start, s"task launch timed out ${ate.getMessage}", ErrorLevel)
           MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(LAUNCH_CMD))
           //kill the task whose launch timed out
           destroy(mesosClientActor, mesosConfig, mesosData, taskId)
         case Failure(c: ClusterResourceError) =>
+          mesosData.removeTask(taskId)
           transid.failed(this, start, s"task launch failed due to resource exhaustion", ErrorLevel)
         //do nothing (mesos-actor already cancelled the submitted task); ContainerPool will retry
         case Failure(t) =>
+          mesosData.removeTask(taskId)
           //kill the task whose launch timed out
           destroy(mesosClientActor, mesosConfig, mesosData, taskId)
           transid.failed(this, start, s"task launch failed ${t.getMessage}", ErrorLevel)
