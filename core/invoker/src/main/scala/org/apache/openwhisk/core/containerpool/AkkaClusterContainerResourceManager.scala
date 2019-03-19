@@ -186,7 +186,7 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
     localReservations
       .count({ case (_, state) => state.size.toMB > 0 }) < config.clusterManagedResourceMaxStarts //only positive reservations affect ability to start
 
-  class ContainerPoolClusterData(instanceId: InvokerInstanceId, pool: ActorRef) extends Actor {
+  class ContainerPoolClusterData(instanceId: InvokerInstanceId, containerPool: ActorRef) extends Actor {
     implicit val cluster = Cluster(system)
     implicit val ec = context.dispatcher
     val mediator = DistributedPubSub(system).mediator
@@ -247,7 +247,7 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
         logging.error(this, s"failed to update replicated data: $f")
       case RequestReleaseFree(id, refs) =>
         val remotePath = s"/user/${ContainerPoolClusterData.clusterPoolActorName(id)}"
-        logging.info(this, s"notifying invoker ${remotePath}")
+        logging.info(this, s"notifying invoker ${id} to free ${refs.size} containers")
         mediator ! Send(path = remotePath, msg = ReleaseFree(refs), localAffinity = false)
       case NodeStatsUpdate(stats) =>
         logging.info(
@@ -262,25 +262,25 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
         MetricEmitter.emitHistogramMetric(
           LoggingMarkers.CLUSTER_RESOURCES_MAX_MEM,
           stats.values.maxBy(_.mem).mem.toLong)
-        MetricEmitter.emitCounterMetric(LoggingMarkers.CLUSTER_RESOURCES_NODE_COUNT, stats.size)
+        MetricEmitter.emitHistogramMetric(LoggingMarkers.CLUSTER_RESOURCES_NODE_COUNT, stats.size)
 
         if (!prewarmsInitialized) { //we assume that when stats are received, we should startup prewarm containers
           prewarmsInitialized = true
           logging.info(this, "initializing prewarmpool after stats recevied")
           //        initPrewarms()
-          pool ! InitPrewarms
+          containerPool ! InitPrewarms
         }
 
         //only signal updates (to pool or replicator) in case things have changed
         if (lastStats != stats) {
           lastStats = stats
-          pool ! ResourceUpdate
+          containerPool ! ResourceUpdate
         }
 
       case r: ReleaseFree =>
         logging.info(this, s"got releasefree from ${sender()}")
         //forward to the pool
-        pool.forward(r)
+        containerPool.forward(r)
       case c @ Changed(LWWRegisterKey(idStr)) =>
         val resRegex = "reservation(\\d+)".r
         val unusedRegex = "unused(\\d+)".r
