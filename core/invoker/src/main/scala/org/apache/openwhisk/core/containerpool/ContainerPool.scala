@@ -19,6 +19,7 @@ package org.apache.openwhisk.core.containerpool
 
 import akka.actor.{Actor, ActorRef, ActorRefFactory, Props}
 import java.time.Instant
+import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.{AkkaLogging, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.connector.MessageFeed
 import org.apache.openwhisk.core.entity._
@@ -66,7 +67,12 @@ class ContainerPool(instanceId: InvokerInstanceId,
 
   implicit val logging = new AkkaLogging(context.system.log)
 
-  val resourceManager = new AkkaClusterContainerResourceManager(context.system, instanceId, self, poolConfig)
+  val resourceManager = if (poolConfig.clusterManagedResources) {
+    new AkkaClusterContainerResourceManager(context.system, instanceId, self, poolConfig)
+  } else {
+    self ! InitPrewarms
+    new LocalContainerResourceManager()
+  }
   var freePool = immutable.Map.empty[ActorRef, ContainerData]
   var busyPool = immutable.Map.empty[ActorRef, ContainerData]
   var prewarmedPool = immutable.Map.empty[ActorRef, ContainerData]
@@ -74,6 +80,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
   // buffered here to keep order of computation.
   // Otherwise actions with small memory-limits could block actions with large memory limits.
   var runBuffer = immutable.Queue.empty[Run]
+  var resent = immutable.Set.empty[ActivationId]
   val logMessageInterval = 10.seconds
 
   var prewarmsInitialized = false
@@ -109,6 +116,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
     // fail for example, or a container has aged and was destroying itself when a new request was assigned)
     case r: Run =>
       implicit val tid: TransactionId = r.msg.transid
+      resent = resent - r.msg.activationId
       // Check if the message is resent from the buffer. Only the first message on the buffer can be resent.
       val isResentFromBuffer = runBuffer.nonEmpty && runBuffer.dequeueOption.exists(_._1.msg == r.msg)
       // Only process request, if there are no other requests waiting for free slots, or if the current request is the
@@ -198,7 +206,11 @@ class ContainerPool(instanceId: InvokerInstanceId,
               // from the buffer
               val (_, newBuffer) = runBuffer.dequeue
               runBuffer = newBuffer
-              runBuffer.dequeueOption.foreach { case (run, _) => self ! run }
+              runBuffer.dequeueOption.foreach {
+                case (run, _) =>
+                  resent = resent + run.msg.activationId
+                  self ! run
+              }
             }
             actor ! r // forwards the run request to the container
             logContainerStart(r, containerState, newData.activeActivationCount, container)
@@ -215,6 +227,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
               s"needed memory: ${r.action.limits.memory.megabytes} MB, " +
               s"waiting messages: ${runBuffer.size}, " +
               resourceManager.rescheduleLogMessage
+            MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESCHEDULED_ACTIVATION)
             val retryLogDeadline = if (isErrorLogged) {
               if (poolConfig.clusterManagedResources) {
                 logging.warn(this, msg)(r.msg.transid) //retry loop may be common in cluster manager resource case, so use warn level
@@ -309,6 +322,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
       //stop tracking via reserved
       resourceManager.releaseReservation(sender())
     case NeedResources(size: ByteSize) => //this is the inverse of NeedWork
+      MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESOURCE_ERROR)
       //we probably are here because resources were not available even though we thought they were,
       //so preemptively request more
       resourceManager.requestSpace(size)
@@ -331,9 +345,14 @@ class ContainerPool(instanceId: InvokerInstanceId,
    */
   def processBuffer() = {
     if (poolConfig.clusterManagedResources) {
+      //if next runbuffer item has not already been resent, send it
       runBuffer.dequeueOption match {
-        case Some((run, _)) => //run the first from buffer
-          self ! run
+        case Some((run, newQueue)) => //run the first from buffer
+          //avoid sending dupes
+          if (!resent.contains(run.msg.activationId)) {
+            resent = resent + run.msg.activationId
+            self ! run
+          }
         case None => //feed me!
           feed ! MessageFeed.Processed
       }
