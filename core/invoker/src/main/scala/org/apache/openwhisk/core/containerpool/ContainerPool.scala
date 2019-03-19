@@ -234,6 +234,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
               s"needed memory: ${r.action.limits.memory.megabytes} MB, " +
               s"waiting messages: ${runBuffer.size}, " +
               resourceManager.rescheduleLogMessage
+            MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESCHEDULED_ACTIVATION)
             val retryLogDeadline = if (isErrorLogged) {
               if (poolConfig.clusterManagedResources) {
                 logging.warn(this, msg)(r.msg.transid) //retry loop may be common in cluster manager resource case, so use warn level
@@ -332,6 +333,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
       //stop tracking via reserved
       resourceManager.releaseReservation(sender())
     case NeedResources(size: ByteSize) => //this is the inverse of NeedWork
+      MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESOURCE_ERROR)
       //we probably are here because resources were not available even though we thought they were,
       //so preemptively request more
       resourceManager.requestSpace(size)
