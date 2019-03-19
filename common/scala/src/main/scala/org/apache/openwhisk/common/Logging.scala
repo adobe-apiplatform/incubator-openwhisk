@@ -324,6 +324,8 @@ object LoggingMarkers {
   private val kafka = "kafka"
   private val loadbalancer = "loadbalancer"
   private val containerClient = "containerClient"
+  private val containerPool = "containerPool"
+  private val clusterResourceManager = "clusterResources"
 
   /*
    * Controller related markers
@@ -395,6 +397,16 @@ object LoggingMarkers {
       MeasurementUnit.none)
   val CONTAINER_CLIENT_RETRIES =
     LogMarkerToken(containerClient, "retries", count)(MeasurementUnit.none)
+  val CONTAINER_POOL_RESOURCE_ERROR =
+    LogMarkerToken(containerPool, "resourceError", count)(MeasurementUnit.none)
+  val CONTAINER_POOL_RESCHEDULED_ACTIVATION =
+    LogMarkerToken(containerPool, "rescheduledActivation", count)(MeasurementUnit.none)
+  val CLUSTER_RESOURCES_TOTAL_MEM =
+    LogMarkerToken(clusterResourceManager, "totalMemory", count)(MeasurementUnit.none)
+  val CLUSTER_RESOURCES_MAX_MEM =
+    LogMarkerToken(clusterResourceManager, "maxMemory", count)(MeasurementUnit.none)
+  val CLUSTER_RESOURCES_NODE_COUNT =
+    LogMarkerToken(clusterResourceManager, "nodes", count)(MeasurementUnit.none)
 
   val INVOKER_TOTALMEM_BLACKBOX = LogMarkerToken(loadbalancer, "totalCapacityBlackBox", count)(MeasurementUnit.none)
   val INVOKER_TOTALMEM_MANAGED = LogMarkerToken(loadbalancer, "totalCapacityManaged", count)(MeasurementUnit.none)
