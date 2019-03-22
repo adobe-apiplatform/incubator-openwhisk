@@ -39,7 +39,6 @@ import org.apache.openwhisk.core.connector.{
   CompletionMessage,
   ResultMessage
 }
-import org.apache.openwhisk.core.containerpool.ClusterManagedCapacityMonitor
 import org.apache.openwhisk.core.containerpool.WarmingData
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.containerpool.logging.LogCollectingException
@@ -274,7 +273,7 @@ class ContainerProxyTests
       Future.successful(())
   }
   val poolConfig =
-    ContainerPoolConfig(2.MB, 0.5, false, false, 10, ClusterManagedCapacityMonitor(0.5, 10.seconds, 1024.B))
+    ContainerPoolConfig(2.MB, 0.5, false, false, false, 10)
   val filterEnvVar = (k: String) => Character.isUpperCase(k.charAt(0))
 
   behavior of "ContainerProxy"
