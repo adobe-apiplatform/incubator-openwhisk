@@ -17,6 +17,7 @@
 
 package org.apache.openwhisk.core.containerpool.mesos.test
 
+import akka.actor.ActorRef
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Sink
@@ -54,9 +55,11 @@ import org.apache.openwhisk.core.containerpool.ContainerArgsConfig
 import org.apache.openwhisk.core.containerpool.ContainerPoolConfig
 import org.apache.openwhisk.core.containerpool.logging.DockerToActivationLogStore
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
+import org.apache.openwhisk.core.entity.InvokerInstanceId
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.mesos.MesosConfig
 import org.apache.openwhisk.core.mesos.MesosContainerFactory
+import org.apache.openwhisk.core.mesos.MesosData
 import org.apache.openwhisk.core.mesos.MesosTimeoutConfig
 
 @RunWith(classOf[JUnitRunner])
@@ -74,7 +77,7 @@ class MesosContainerFactoryTest
     new WhiskConfig(Map(wskApiHostname -> "apihost") ++ wskApiHost)
   var count = 0
   var lastTaskId: String = null
-  def testTaskId() = {
+  def testTaskId(instanceId: InvokerInstanceId) = {
     count += 1
     lastTaskId = "testTaskId" + count
     lastTaskId
@@ -85,6 +88,12 @@ class MesosContainerFactoryTest
     ContainerPoolConfig(21200.MB, 0.5, false, false, false, 10)
   val actionMemory = 265.MB
   val mesosCpus = poolConfig.cpuShare(actionMemory) / 1024.0
+  def mesosTestData(ref: Option[ActorRef] = None) = new MesosData {
+    override val autoSubscribe: Boolean = false
+    override def getMesosClient(): ActorRef = ref.getOrElse(testActor)
+    override def addTask(taskId: String): Unit = {}
+    override def removeTask(taskId: String): Unit = {}
+  }
 
   val containerArgsConfig =
     new ContainerArgsConfig(
@@ -99,9 +108,22 @@ class MesosContainerFactoryTest
   }
 
   val timeouts = MesosTimeoutConfig(1.seconds, 1.seconds, 1.seconds, 1.seconds, 1.seconds)
-
+  val instanceId = InvokerInstanceId(123, Some("test"), Some("test"), 0.B)
   val mesosConfig =
-    MesosConfig("http://master:5050", None, "*", true, Seq.empty, " ", Seq.empty, true, None, 1.seconds, 2, timeouts)
+    MesosConfig(
+      "http://master:5050",
+      None,
+      "*",
+      true,
+      Seq.empty,
+      " ",
+      Seq.empty,
+      true,
+      None,
+      1.seconds,
+      2,
+      timeouts,
+      false)
 
   behavior of "MesosContainerFactory"
 
@@ -111,10 +133,10 @@ class MesosContainerFactoryTest
       wskConfig,
       system,
       logging,
+      instanceId,
       Map("--arg1" -> Set("v1", "v2")),
       containerArgsConfig,
-      mesosConfig = mesosConfig,
-      clientFactory = (system, mesosConfig) => testActor)
+      mesosConfig = mesosConfig)
 
     expectMsg(Subscribe)
   }
@@ -132,17 +154,18 @@ class MesosContainerFactoryTest
       None,
       1.seconds,
       2,
-      timeouts)
+      timeouts,
+      false)
 
     val factory =
       new MesosContainerFactory(
         wskConfig,
         system,
         logging,
+        instanceId,
         Map("--arg1" -> Set("v1", "v2"), "--arg2" -> Set("v3", "v4"), "other" -> Set("v5", "v6")),
         containerArgsConfig,
         mesosConfig = mesosConfig,
-        clientFactory = (_, _) => testActor,
         taskIdGenerator = testTaskId _)
 
     expectMsg(Subscribe)
@@ -183,10 +206,10 @@ class MesosContainerFactoryTest
         wskConfig,
         system,
         logging,
+        instanceId,
         Map("--arg1" -> Set("v1", "v2"), "--arg2" -> Set("v3", "v4"), "other" -> Set("v5", "v6")),
         containerArgsConfig,
         mesosConfig = mesosConfig,
-        clientFactory = (system, mesosConfig) => probe.testActor,
         taskIdGenerator = testTaskId _)
 
     probe.expectMsg(Subscribe)
@@ -252,6 +275,7 @@ class MesosContainerFactoryTest
         wskConfig,
         system,
         logging,
+        instanceId,
         Map("--arg1" -> Set("v1", "v2"), "--arg2" -> Set("v3", "v4"), "other" -> Set("v5", "v6")),
         new ContainerArgsConfig(
           "bridge",
@@ -260,7 +284,6 @@ class MesosContainerFactoryTest
           Seq.empty,
           Map("extra1" -> Set("e1", "e2"), "extra2" -> Set("e3", "e4"))),
         mesosConfig = mesosConfig,
-        clientFactory = (system, mesosConfig) => probe.testActor,
         taskIdGenerator = testTaskId _)
 
     probe.expectMsg(Subscribe)
