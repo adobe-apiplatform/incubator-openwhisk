@@ -15,19 +15,18 @@
  * limitations under the License.
  */
 
-package common
+package org.apache.openwhisk.core.containerpool
+import akka.actor.ActorRef
+import org.apache.openwhisk.core.entity.ByteSize
 
-import java.time.Instant
-import scala.concurrent.duration._
+trait ContainerResourceManager {
+  def activationStartLogMessage(): String
+  def rescheduleLogMessage(): String
 
-trait TimingHelpers {
-  def between(start: Instant, end: Instant): FiniteDuration =
-    FiniteDuration(java.time.Duration.between(start, end).toNanos, NANOSECONDS)
-
-  def durationOf[A](block: => A): (FiniteDuration, A) = {
-    val start = Instant.now
-    val value = block
-    val end = Instant.now
-    (between(start, end), value)
-  }
+  def updateUnused(unused: Map[ActorRef, ContainerData])
+  def allowMoreStarts(config: ContainerPoolConfig): Boolean
+  def addReservation(ref: ActorRef, byteSize: ByteSize): Unit
+  def releaseReservation(ref: ActorRef): Unit
+  def requestSpace(size: ByteSize): Unit
+  def canLaunch(size: ByteSize, poolMemory: Long, poolConfig: ContainerPoolConfig): Boolean
 }

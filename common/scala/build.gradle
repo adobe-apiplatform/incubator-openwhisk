@@ -72,8 +72,9 @@ dependencies {
         exclude group: 'io.kamon', module: 'sigar-loader'
     }
     compile ('io.kamon:kamon-prometheus_2.12:1.1.1')
+    compile ('io.kamon:kamon-datadog_2.12:1.0.0')
     //for mesos
-    compile 'com.adobe.api.platform.runtime:mesos-actor:0.0.17'
+    compile 'com.adobe.api.platform.runtime:mesos-actor:0.0.23'
 
     //tracing support
     compile 'io.opentracing:opentracing-api:0.31.0'
@@ -86,7 +87,7 @@ dependencies {
 
     compile 'io.reactivex:rxscala_2.12:0.26.5'
     compile 'io.reactivex:rxjava-reactive-streams:1.2.1'
-    compile ('com.microsoft.azure:azure-cosmosdb:2.4.0'){
+    compile ('com.microsoft.azure:azure-cosmosdb:2.4.2'){
         exclude group: 'commons-logging'
     }
 
@@ -96,6 +97,9 @@ dependencies {
         exclude group: 'com.fasterxml.jackson.core'
         exclude group: 'com.fasterxml.jackson.dataformat'
     }
+    compile 'com.lightbend.akka.management:akka-management-cluster-bootstrap_2.12:0.11.0'
+    compile 'com.lightbend.akka.discovery:akka-discovery-kubernetes-api_2.12:0.11.0'
+    compile 'com.lightbend.akka.discovery:akka-discovery-marathon-api_2.12:0.11.0'
     scoverage gradle.scoverage.deps
 }
 

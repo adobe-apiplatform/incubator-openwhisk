@@ -22,8 +22,8 @@ import org.apache.openwhisk.common.{Logging, TransactionId}
 import org.apache.openwhisk.core.WhiskConfig
 import org.apache.openwhisk.core.entity.{ByteSize, ExecManifest, InvokerInstanceId}
 import org.apache.openwhisk.spi.Spi
-
 import scala.concurrent.Future
+import scala.concurrent.duration.FiniteDuration
 
 case class ContainerArgsConfig(network: String,
                                dnsServers: Seq[String] = Seq.empty,
@@ -31,10 +31,16 @@ case class ContainerArgsConfig(network: String,
                                dnsOptions: Seq[String] = Seq.empty,
                                extraArgs: Map[String, Set[String]] = Map.empty)
 
+case class ClusterManagedCapacityMonitor(idlePruneUseRatio: Double,
+                                         idleTimeout: FiniteDuration,
+                                         idleRemoveSize: ByteSize)
+
 case class ContainerPoolConfig(userMemory: ByteSize,
                                concurrentPeekFactor: Double,
                                akkaClient: Boolean,
-                               clusterManagedResources: Boolean) {
+                               clusterManagedResources: Boolean,
+                               clusterManagedResourceMaxStarts: Int,
+                               clusterManagedCapacityMonitor: ClusterManagedCapacityMonitor) {
   require(
     concurrentPeekFactor > 0 && concurrentPeekFactor <= 1.0,
     s"concurrentPeekFactor must be > 0 and <= 1.0; was $concurrentPeekFactor")
@@ -55,7 +61,26 @@ case class ContainerPoolConfig(userMemory: ByteSize,
  */
 trait ContainerFactory {
 
-  /** create a new Container */
+  /**
+   * Create a new Container
+   *
+   * The created container has to satisfy following requirements:
+   * - The container's file system is based on the provided action image and may have a read/write layer on top.
+   *   Some managed action runtimes may need the capability to write files.
+   * - If the specified image is not available on the system, it is pulled from an image
+   *   repository - for example, Docker Hub.
+   * - The container needs a network setup - usually, a network interface - such that the invoker is able
+   *   to connect the action container. The container must be able to perform DNS resolution based
+   *   on the settings provided via ContainerArgsConfig. If needed by action authors,
+   *   the container should be able to connect to other systems or even the internet to consume services.
+   * - The IP address of said interface is stored in the created Container instance if you want to use
+   *   the standard init / run behaviour defined in the Container trait.
+   * - The default process specified in the action image is run.
+   * - It is desired that all stdout / stderr written by processes in the container is captured such
+   *   that it can be obtained using the logs() method of the Container trait.
+   * - It is desired that the container supports and enforces the specified memory limit and CPU shares.
+   *   In particular, action memory limits rely on the underlying container technology.
+   */
   def createContainer(tid: TransactionId,
                       name: String,
                       actionImage: ExecManifest.ImageName,

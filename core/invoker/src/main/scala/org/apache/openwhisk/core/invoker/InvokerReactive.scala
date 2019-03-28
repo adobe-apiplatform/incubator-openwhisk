@@ -96,9 +96,8 @@ class InvokerReactive(
           "--ulimit" -> Set("nofile=1024:1024"),
           "--pids-limit" -> Set("1024")) ++ logsProvider.containerParameters)
   containerFactory.init()
-  //sys.addShutdownHook(containerFactory.cleanup())
-  //TODO: separate PR for changing to CoordinatedShutdown
-  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "someTaskName") { () =>
+
+  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "invokerCleanup") { () =>
     containerFactory.cleanup()
     Future.successful(Done)
   }
@@ -198,7 +197,7 @@ class InvokerReactive(
   }
 
   private val pool =
-    actorSystem.actorOf(ContainerPool.props(childFactory, poolConfig, activationFeed, prewarmingConfigs))
+    actorSystem.actorOf(ContainerPool.props(instance, childFactory, poolConfig, activationFeed, prewarmingConfigs))
 
   /** Is called when an ActivationMessage is read from Kafka */
   def processActivationMessage(bytes: Array[Byte]): Future[Unit] = {
@@ -232,7 +231,6 @@ class InvokerReactive(
             .flatMap { action =>
               action.toExecutableWhiskAction match {
                 case Some(executable) =>
-                  println(s"running activation ${msg.activationId}")
                   pool ! Run(executable, msg)
                   Future.successful(())
                 case None =>
