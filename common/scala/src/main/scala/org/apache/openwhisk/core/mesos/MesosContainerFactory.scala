@@ -248,9 +248,9 @@ object MesosContainerFactory {
       LoggingMarkers.INVOKER_MESOS_CMD(MesosTask.KILL_CMD),
       s"killing mesos taskid $taskId (timeout: ${taskDeleteTimeout})",
       logLevel = InfoLevel)
+    mesosData.removeTask(taskId)
     mesosClientActor
       .ask(DeleteTask(taskId))(taskDeleteTimeout)
-      .map(_ => mesosData.removeTask(taskId))
       .andThen {
         case Success(_) => transid.finished(this, start, logLevel = InfoLevel)
         case Failure(ate: AskTimeoutException) =>
