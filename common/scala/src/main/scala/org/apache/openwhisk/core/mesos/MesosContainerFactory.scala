@@ -211,7 +211,8 @@ class MesosContainerFactory(config: WhiskConfig,
         }
     } else {
       val deleting = mesosData.tasks.map { taskId =>
-        MesosContainerFactory.destroy(mesosClientActor, mesosConfig, mesosData, taskId._1)(
+        //don't wait for kill responses in this case, since it may take longer than allowed to shutdown the container!
+        MesosContainerFactory.destroy(mesosClientActor, mesosConfig, mesosData, taskId._1, false)(
           TransactionId("mesos"),
           logging,
           ec)
@@ -237,11 +238,13 @@ object MesosContainerFactory {
   private def taskIdGenerator(instance: InvokerInstanceId): String = {
     s"whisk-${instance.toInt}-${startTime}-${counter.next()}"
   }
-  protected[mesos] def destroy(
-    mesosClientActor: ActorRef,
-    mesosConfig: MesosConfig,
-    mesosData: MesosData,
-    taskId: String)(implicit transid: TransactionId, logging: Logging, ec: ExecutionContext): Future[Unit] = {
+  protected[mesos] def destroy(mesosClientActor: ActorRef,
+                               mesosConfig: MesosConfig,
+                               mesosData: MesosData,
+                               taskId: String,
+                               verifyDelete: Boolean = true)(implicit transid: TransactionId,
+                                                             logging: Logging,
+                                                             ec: ExecutionContext): Future[Unit] = {
     val taskDeleteTimeout = Timeout(mesosConfig.timeouts.taskDelete)
 
     val start = transid.started(
@@ -250,16 +253,24 @@ object MesosContainerFactory {
       s"killing mesos taskid $taskId (timeout: ${taskDeleteTimeout})",
       logLevel = InfoLevel)
     mesosData.removeTask(taskId)
-    mesosClientActor
-      .ask(DeleteTask(taskId))(taskDeleteTimeout)
-      .andThen {
-        case Success(_) => transid.finished(this, start, logLevel = InfoLevel)
-        case Failure(ate: AskTimeoutException) =>
-          transid.failed(this, start, s"task destroy timed out ${ate.getMessage}", ErrorLevel)
-          MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(MesosTask.KILL_CMD))
-        case Failure(t) => transid.failed(this, start, s"task destroy failed ${t.getMessage}", ErrorLevel)
-      }
-      .map(_ => {})
+
+    //in some cases we don't want to wait for kill completion
+    if (verifyDelete) {
+      mesosClientActor
+        .ask(DeleteTask(taskId))(taskDeleteTimeout)
+        .andThen {
+          case Success(_) => transid.finished(this, start, logLevel = InfoLevel)
+          case Failure(ate: AskTimeoutException) =>
+            transid.failed(this, start, s"task destroy timed out ${ate.getMessage}", ErrorLevel)
+            MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(MesosTask.KILL_CMD))
+          case Failure(t) => transid.failed(this, start, s"task destroy failed ${t.getMessage}", ErrorLevel)
+        }
+        .map(_ => {})
+    } else {
+      mesosClientActor ! DeleteTask(taskId)
+      transid.finished(this, start, logLevel = InfoLevel)
+      Future.successful({})
+    }
   }
 }
 
