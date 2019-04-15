@@ -27,10 +27,9 @@ import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import akka.util.Timeout
 import com.adobe.api.platform.runtime.mesos.Bridge
+import com.adobe.api.platform.runtime.mesos.CapacityFailure
 import com.adobe.api.platform.runtime.mesos.CommandDef
 import com.adobe.api.platform.runtime.mesos.Constraint
-import com.adobe.api.platform.runtime.mesos.DeleteTask
-import com.adobe.api.platform.runtime.mesos.HealthCheckConfig
 import com.adobe.api.platform.runtime.mesos.Host
 import com.adobe.api.platform.runtime.mesos.Running
 import com.adobe.api.platform.runtime.mesos.SubmitTask
@@ -46,6 +45,7 @@ import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.LoggingMarkers
 import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.containerpool.ClusterResourceError
 import org.apache.openwhisk.core.containerpool.Container
 import org.apache.openwhisk.core.containerpool.ContainerAddress
 import org.apache.openwhisk.core.containerpool.ContainerId
@@ -71,7 +71,8 @@ object MesosTask {
 
   def create(mesosClientActor: ActorRef,
              mesosConfig: MesosConfig,
-             taskIdGenerator: () => String,
+             mesosData: MesosData,
+             taskId: String,
              transid: TransactionId,
              image: String,
              userProvidedImage: Boolean = false,
@@ -90,7 +91,6 @@ object MesosTask {
     val mesosCpuShares = cpuShares / 1024.0 // convert openwhisk (docker based) shares to mesos (cpu percentage)
     val mesosRam = memory.toMB.toInt
 
-    val taskId = taskIdGenerator()
     val lowerNetwork = network.toLowerCase // match bridge+host without case, but retain case for user specified network
     val taskNetwork = lowerNetwork match {
       case "bridge" => Bridge
@@ -99,16 +99,7 @@ object MesosTask {
     }
     val dnsOrEmpty = if (dnsServers.nonEmpty) Map("dns" -> dnsServers.toSet) else Map.empty
 
-    //transform our config to mesos-actor config:
-    val healthCheckConfig = mesosConfig.healthCheck.map(
-      c =>
-        HealthCheckConfig(
-          c.portIndex,
-          c.delay.toSeconds.toDouble,
-          c.interval.toSeconds.toDouble,
-          c.timeout.toSeconds.toDouble,
-          c.gracePeriod.toSeconds.toDouble,
-          c.maxConsecutiveFailures))
+    val healthCheckConfig = None
     //define task
     val task = new TaskDef(
       taskId,
@@ -130,23 +121,33 @@ object MesosTask {
       LoggingMarkers.INVOKER_MESOS_CMD(LAUNCH_CMD),
       s"launching mesos task for taskid $taskId (image:$image, mem: $mesosRam, cpu: $mesosCpuShares) (timeout: $taskLaunchTimeout)",
       logLevel = InfoLevel)
-
+    mesosData.addTask(taskId)
     val launched: Future[Running] =
       mesosClientActor.ask(SubmitTask(task))(taskLaunchTimeout).mapTo[Running]
 
     launched
+      .recoverWith {
+        case c: CapacityFailure =>
+          Future.failed(ClusterResourceError(memory, c.remainingResources.maxBy(_._1)._1.toLong.MB))
+      }
       .andThen {
         case Success(taskDetails) =>
           transid.finished(this, start, s"launched task ${taskId} at ${taskDetails.hostname}:${taskDetails
             .hostports(0)}", logLevel = InfoLevel)
         case Failure(ate: AskTimeoutException) =>
+          mesosData.removeTask(taskId)
           transid.failed(this, start, s"task launch timed out ${ate.getMessage}", ErrorLevel)
           MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(LAUNCH_CMD))
           //kill the task whose launch timed out
-          destroy(mesosClientActor, mesosConfig, taskId)
+          destroy(mesosClientActor, mesosConfig, mesosData, taskId)
+        case Failure(c: ClusterResourceError) =>
+          mesosData.removeTask(taskId)
+          transid.failed(this, start, s"task launch failed due to resource exhaustion", ErrorLevel)
+        //do nothing (mesos-actor already cancelled the submitted task); ContainerPool will retry
         case Failure(t) =>
+          mesosData.removeTask(taskId)
           //kill the task whose launch timed out
-          destroy(mesosClientActor, mesosConfig, taskId)
+          destroy(mesosClientActor, mesosConfig, mesosData, taskId)
           transid.failed(this, start, s"task launch failed ${t.getMessage}", ErrorLevel)
       }
       .map(taskDetails => {
@@ -154,32 +155,15 @@ object MesosTask {
         val taskPort = taskDetails.hostports(0)
         val containerIp = new ContainerAddress(taskHost, taskPort)
         val containerId = new ContainerId(taskId);
-        new MesosTask(containerId, containerIp, ec, log, as, taskId, mesosClientActor, mesosConfig)
+        new MesosTask(containerId, containerIp, ec, log, as, taskId, mesosClientActor, mesosConfig, mesosData)
       })
 
   }
-  private def destroy(mesosClientActor: ActorRef, mesosConfig: MesosConfig, taskId: String)(
+  private def destroy(mesosClientActor: ActorRef, mesosConfig: MesosConfig, mesosData: MesosData, taskId: String)(
     implicit transid: TransactionId,
     logging: Logging,
     ec: ExecutionContext): Future[Unit] = {
-    val taskDeleteTimeout = Timeout(mesosConfig.timeouts.taskDelete)
-
-    val start = transid.started(
-      this,
-      LoggingMarkers.INVOKER_MESOS_CMD(MesosTask.KILL_CMD),
-      s"killing mesos taskid $taskId (timeout: ${taskDeleteTimeout})",
-      logLevel = InfoLevel)
-
-    mesosClientActor
-      .ask(DeleteTask(taskId))(taskDeleteTimeout)
-      .andThen {
-        case Success(_) => transid.finished(this, start, logLevel = InfoLevel)
-        case Failure(ate: AskTimeoutException) =>
-          transid.failed(this, start, s"task destroy timed out ${ate.getMessage}", ErrorLevel)
-          MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(MesosTask.KILL_CMD))
-        case Failure(t) => transid.failed(this, start, s"task destroy failed ${t.getMessage}", ErrorLevel)
-      }
-      .map(_ => {})
+    MesosContainerFactory.destroy(mesosClientActor, mesosConfig, mesosData, taskId)
   }
 }
 
@@ -194,7 +178,8 @@ class MesosTask(override protected val id: ContainerId,
                 override protected val as: ActorSystem,
                 taskId: String,
                 mesosClientActor: ActorRef,
-                mesosConfig: MesosConfig)
+                mesosConfig: MesosConfig,
+                mesosData: MesosData)
     extends Container {
 
   /** Stops the container from consuming CPU cycles. */
@@ -211,7 +196,7 @@ class MesosTask(override protected val id: ContainerId,
 
   /** Completely destroys this instance of the container. */
   override def destroy()(implicit transid: TransactionId): Future[Unit] = {
-    MesosTask.destroy(mesosClientActor, mesosConfig, taskId)
+    MesosTask.destroy(mesosClientActor, mesosConfig, mesosData, taskId)
   }
 
   /**
