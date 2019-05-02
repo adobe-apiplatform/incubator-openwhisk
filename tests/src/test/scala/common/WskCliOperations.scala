@@ -693,7 +693,6 @@ class CliActivationOperations(val wsk: RunCliCmd) extends ActivationOperations w
             .cli(
               wp.overrides ++ Seq(noun, "logs", activationId, "--auth", wp.authKey),
               expectedExitCode = DONTCARE_EXIT)
-        println(s"RESULT ${result}")
         if (result.exitCode == NOT_FOUND) {
           null
         } else if (result.exitCode == SUCCESS_EXIT) {

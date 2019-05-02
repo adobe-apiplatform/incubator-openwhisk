@@ -774,7 +774,10 @@ class RestActivationOperations(implicit val actorSystem: ActorSystem)
     val activationLogs = waitfor(
       () => {
         val result = logs(Some(activationId), expectedExitCode = DONTCARE_EXIT)(wp)
-        if (result.statusCode == NotFound) {
+        if (result.statusCode == NotFound || result.respBody.fields
+              .get("logs")
+              .map(_.convertTo[JsArray].elements.length)
+              .getOrElse(0) == 0) { //wait for activation to be found AND logs to not be empty
           null
         } else {
           result
