@@ -30,6 +30,8 @@ import com.adobe.api.platform.runtime.mesos.Bridge
 import com.adobe.api.platform.runtime.mesos.CapacityFailure
 import com.adobe.api.platform.runtime.mesos.CommandDef
 import com.adobe.api.platform.runtime.mesos.Constraint
+import com.adobe.api.platform.runtime.mesos.DockerPullFailure
+import com.adobe.api.platform.runtime.mesos.DockerRunFailure
 import com.adobe.api.platform.runtime.mesos.Host
 import com.adobe.api.platform.runtime.mesos.Running
 import com.adobe.api.platform.runtime.mesos.SubmitTask
@@ -128,7 +130,10 @@ object MesosTask {
     launched
       .recoverWith {
         case c: CapacityFailure =>
-          Future.failed(ClusterResourceError(memory, c.remainingResources.maxBy(_._1)._1.toLong.MB))
+          Future.failed(
+            ClusterResourceError(
+              memory,
+              if (c.remainingResources.nonEmpty) c.remainingResources.maxBy(_._1)._1.toLong.MB else 0.MB))
       }
       .andThen {
         case Success(taskDetails) =>
@@ -140,9 +145,17 @@ object MesosTask {
           MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(LAUNCH_CMD))
           //kill the task whose launch timed out
           destroy(mesosClientActor, mesosConfig, mesosData, taskId)
-        case Failure(c: ClusterResourceError) =>
+        case Failure(_: ClusterResourceError) =>
           mesosData.removeTask(taskId)
           transid.failed(this, start, s"task launch failed due to resource exhaustion", ErrorLevel)
+        case Failure(t: DockerRunFailure) =>
+          mesosData.removeTask(taskId)
+          //no need to destroy the task
+          transid.failed(this, start, s"task launch failed on docker run ${t.getMessage}", ErrorLevel)
+        case Failure(t: DockerPullFailure) =>
+          mesosData.removeTask(taskId)
+          //no need to destroy the task
+          transid.failed(this, start, s"task launch failed on docker pull ${t.getMessage}", ErrorLevel)
         //do nothing (mesos-actor already cancelled the submitted task); ContainerPool will retry
         case Failure(t) =>
           mesosData.removeTask(taskId)

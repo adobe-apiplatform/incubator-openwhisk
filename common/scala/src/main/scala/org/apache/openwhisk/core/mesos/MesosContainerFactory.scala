@@ -27,6 +27,8 @@ import akka.pattern.ask
 import akka.util.Timeout
 import com.adobe.api.platform.runtime.mesos.Constraint
 import com.adobe.api.platform.runtime.mesos.DeleteTask
+import com.adobe.api.platform.runtime.mesos.DockerPullFailure
+import com.adobe.api.platform.runtime.mesos.DockerRunFailure
 import com.adobe.api.platform.runtime.mesos.LIKE
 import com.adobe.api.platform.runtime.mesos.Subscribe
 import com.adobe.api.platform.runtime.mesos.SubscribeComplete
@@ -90,7 +92,8 @@ case class MesosConfig(masterUrl: String,
                        offerRefuseDuration: FiniteDuration,
                        heartbeatMaxFailures: Int,
                        timeouts: MesosTimeoutConfig,
-                       useClusterBootstrap: Boolean) {}
+                       useClusterBootstrap: Boolean,
+                       dockerFailureRetries: Int) {}
 
 class MesosContainerFactory(config: WhiskConfig,
                             actorSystem: ActorSystem,
@@ -155,27 +158,53 @@ class MesosContainerFactory(config: WhiskConfig,
     } else {
       mesosConfig.constraints
     }
-    val taskId = taskIdGenerator(instance)
+    retryingCreateContainer(tid, name, image, userProvidedImage, memory, cpuShares, constraintStrings)
+  }
 
-    MesosTask.create(
-      mesosClientActor,
-      mesosConfig,
-      mesosData,
-      taskId,
-      tid,
-      image = image,
-      userProvidedImage = userProvidedImage,
-      memory = memory,
-      cpuShares = cpuShares,
-      environment = Map("__OW_API_HOST" -> config.wskApiHost),
-      network = containerArgs.network,
-      dnsServers = containerArgs.dnsServers,
-      name = Some(name),
-      //strip any "--" prefixes on parameters (should make this consistent everywhere else)
-      parameters
-        .map({ case (k, v) => if (k.startsWith("--")) (k.replaceFirst("--", ""), v) else (k, v) })
-        ++ containerArgs.extraArgs,
-      parseConstraints(constraintStrings))
+  private def retryingCreateContainer(
+    tid: TransactionId,
+    name: String,
+    image: String,
+    userProvidedImage: Boolean,
+    memory: ByteSize,
+    cpuShares: Int,
+    constraintStrings: Seq[String],
+    retries: Int = 0)(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+    val taskId = taskIdGenerator(instance)
+    MesosTask
+      .create(
+        mesosClientActor,
+        mesosConfig,
+        mesosData,
+        taskId,
+        tid,
+        image = image,
+        userProvidedImage = userProvidedImage,
+        memory = memory,
+        cpuShares = cpuShares,
+        environment = Map("__OW_API_HOST" -> config.wskApiHost),
+        network = containerArgs.network,
+        dnsServers = containerArgs.dnsServers,
+        name = Some(name),
+        //strip any "--" prefixes on parameters (should make this consistent everywhere else)
+        parameters
+          .map({ case (k, v) => if (k.startsWith("--")) (k.replaceFirst("--", ""), v) else (k, v) })
+          ++ containerArgs.extraArgs,
+        parseConstraints(constraintStrings))
+      .recoverWith {
+        case DockerRunFailure(msg) if retries < mesosConfig.dockerFailureRetries =>
+          val newRetries = retries + 1
+          logging.warn(
+            this,
+            s"retrying ($newRetries of ${mesosConfig.dockerFailureRetries}) after docker run failure: $msg")
+          retryingCreateContainer(tid, name, image, userProvidedImage, memory, cpuShares, constraintStrings, newRetries)
+        case DockerPullFailure(msg) if retries < mesosConfig.dockerFailureRetries =>
+          val newRetries = retries + 1
+          logging.warn(
+            this,
+            s"retrying ($newRetries of ${mesosConfig.dockerFailureRetries}) after docker pull failure: $msg")
+          retryingCreateContainer(tid, name, image, userProvidedImage, memory, cpuShares, constraintStrings, newRetries)
+      }
   }
 
   /**
