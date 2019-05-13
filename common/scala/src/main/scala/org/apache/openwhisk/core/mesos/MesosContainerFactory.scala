@@ -27,8 +27,6 @@ import akka.pattern.ask
 import akka.util.Timeout
 import com.adobe.api.platform.runtime.mesos.Constraint
 import com.adobe.api.platform.runtime.mesos.DeleteTask
-import com.adobe.api.platform.runtime.mesos.DockerPullFailure
-import com.adobe.api.platform.runtime.mesos.DockerRunFailure
 import com.adobe.api.platform.runtime.mesos.LIKE
 import com.adobe.api.platform.runtime.mesos.Subscribe
 import com.adobe.api.platform.runtime.mesos.SubscribeComplete
@@ -192,17 +190,14 @@ class MesosContainerFactory(config: WhiskConfig,
           ++ containerArgs.extraArgs,
         parseConstraints(constraintStrings))
       .recoverWith {
-        case DockerRunFailure(msg) if retries < mesosConfig.dockerFailureRetries =>
+        //propagate ClusterResourceError, others will be retried if possible
+        case c: ClusterResourceError =>
+          Future.failed(c)
+        case t if retries < mesosConfig.dockerFailureRetries =>
           val newRetries = retries + 1
           logging.warn(
             this,
-            s"retrying ($newRetries of ${mesosConfig.dockerFailureRetries}) after docker run failure: $msg")
-          retryingCreateContainer(tid, name, image, userProvidedImage, memory, cpuShares, constraintStrings, newRetries)
-        case DockerPullFailure(msg) if retries < mesosConfig.dockerFailureRetries =>
-          val newRetries = retries + 1
-          logging.warn(
-            this,
-            s"retrying ($newRetries of ${mesosConfig.dockerFailureRetries}) after docker pull failure: $msg")
+            s"retrying ($newRetries of ${mesosConfig.dockerFailureRetries}) after failure: $t ${t.getMessage}")
           retryingCreateContainer(tid, name, image, userProvidedImage, memory, cpuShares, constraintStrings, newRetries)
       }
   }
