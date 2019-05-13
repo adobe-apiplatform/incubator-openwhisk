@@ -310,6 +310,13 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
           MetricEmitter.emitCounterMetric(LOADBALANCER_COMPLETION_ACK_FORCED)
         }
 
+        logging.info(this, s"${if (!forced) "received" else "forced"} completion ack for '$aid'")(tid)
+
+        //track overall count of system errors
+        if (isSystemError) {
+          MetricEmitter.emitCounterMetric(LoggingMarkers.LOADBALANCER_SYSTEM_ERRORS)
+        }
+
         // Completion acks that are received here are strictly from user actions - health actions are not part of
         // the load balancer's activation map. Inform the invoker pool supervisor of the user action completion.
         // guard this
