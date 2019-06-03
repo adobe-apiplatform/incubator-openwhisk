@@ -17,10 +17,10 @@
 
 package org.apache.openwhisk.core.invoker
 
+import akka.Done
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 
-import akka.Done
 import akka.actor.{ActorRefFactory, ActorSystem, CoordinatedShutdown, Props}
 import akka.event.Logging.InfoLevel
 import akka.stream.ActorMaterializer
@@ -207,7 +207,7 @@ class InvokerReactive(
   }
 
   private val pool =
-    actorSystem.actorOf(ContainerPool.props(childFactory, poolConfig, activationFeed, prewarmingConfigs))
+    actorSystem.actorOf(ContainerPool.props(instance, childFactory, poolConfig, activationFeed, prewarmingConfigs))
 
   /** Is called when an ActivationMessage is read from Kafka */
   def processActivationMessage(bytes: Array[Byte]): Future[Unit] = {

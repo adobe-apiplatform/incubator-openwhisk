@@ -19,11 +19,15 @@ package org.apache.openwhisk.core.mesos
 
 import akka.actor.ActorRef
 import akka.actor.ActorSystem
+import akka.actor.Address
+import akka.event.Logging.ErrorLevel
+import akka.event.Logging.InfoLevel
+import akka.pattern.AskTimeoutException
 import akka.pattern.ask
+import akka.util.Timeout
 import com.adobe.api.platform.runtime.mesos.Constraint
+import com.adobe.api.platform.runtime.mesos.DeleteTask
 import com.adobe.api.platform.runtime.mesos.LIKE
-import com.adobe.api.platform.runtime.mesos.LocalTaskStore
-import com.adobe.api.platform.runtime.mesos.MesosClient
 import com.adobe.api.platform.runtime.mesos.Subscribe
 import com.adobe.api.platform.runtime.mesos.SubscribeComplete
 import com.adobe.api.platform.runtime.mesos.Teardown
@@ -37,9 +41,13 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration._
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
 import org.apache.openwhisk.common.Counter
 import org.apache.openwhisk.common.Logging
+import org.apache.openwhisk.common.LoggingMarkers
+import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.WhiskConfig
@@ -47,7 +55,6 @@ import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.entity.ByteSize
 import org.apache.openwhisk.core.entity.ExecManifest
 import org.apache.openwhisk.core.entity.InvokerInstanceId
-import org.apache.openwhisk.core.entity.UUID
 
 /**
  * Configuration for mesos timeouts
@@ -82,28 +89,41 @@ case class MesosConfig(masterUrl: String,
                        healthCheck: Option[MesosContainerHealthCheckConfig],
                        offerRefuseDuration: FiniteDuration,
                        heartbeatMaxFailures: Int,
-                       timeouts: MesosTimeoutConfig) {}
+                       timeouts: MesosTimeoutConfig,
+                       useClusterBootstrap: Boolean,
+                       dockerFailureRetries: Int) {}
 
 class MesosContainerFactory(config: WhiskConfig,
                             actorSystem: ActorSystem,
                             logging: Logging,
+                            instance: InvokerInstanceId,
                             parameters: Map[String, Set[String]],
                             containerArgs: ContainerArgsConfig =
                               loadConfigOrThrow[ContainerArgsConfig](ConfigKeys.containerArgs),
                             runtimesRegistryConfig: RuntimesRegistryConfig =
                               loadConfigOrThrow[RuntimesRegistryConfig](ConfigKeys.runtimesRegistry),
                             mesosConfig: MesosConfig = loadConfigOrThrow[MesosConfig](ConfigKeys.mesos),
-                            clientFactory: (ActorSystem, MesosConfig) => ActorRef = MesosContainerFactory.createClient,
-                            taskIdGenerator: () => String = MesosContainerFactory.taskIdGenerator _)
+                            testMesosData: Option[MesosData] = None,
+                            taskIdGenerator: (InvokerInstanceId) => String = MesosContainerFactory.taskIdGenerator _)
     extends ContainerFactory {
 
   implicit val as: ActorSystem = actorSystem
   implicit val ec: ExecutionContext = actorSystem.dispatcher
+  implicit val tid: TransactionId = TransactionId("mesos")
+  val mesosData = testMesosData.getOrElse {
+    if (actorSystem.settings.config.getString("akka.actor.provider") == "cluster") {
+      new MesosClusterData(actorSystem, mesosConfig, logging)
+    } else {
+      new MesosLocalData(actorSystem, mesosConfig, logging)
+    }
+  }
 
-  /** Inits Mesos framework. */
-  val mesosClientActor = clientFactory(as, mesosConfig)
+  private val mesosClientActor = mesosData.getMesosClient()
 
-  subscribe()
+  /** Inits Mesos framework, in case we do not autosubscribe. */
+  if (!mesosData.autoSubscribe) {
+    subscribe()
+  }
 
   /** Subscribes Mesos actor to mesos event stream; retry on timeout (which should be unusual). */
   private def subscribe(): Future[Unit] = {
@@ -136,25 +156,50 @@ class MesosContainerFactory(config: WhiskConfig,
     } else {
       mesosConfig.constraints
     }
+    retryingCreateContainer(tid, name, image, userProvidedImage, memory, cpuShares, constraintStrings)
+  }
 
-    MesosTask.create(
-      mesosClientActor,
-      mesosConfig,
-      taskIdGenerator,
-      tid,
-      image = image,
-      userProvidedImage = userProvidedImage,
-      memory = memory,
-      cpuShares = cpuShares,
-      environment = Map("__OW_API_HOST" -> config.wskApiHost),
-      network = containerArgs.network,
-      dnsServers = containerArgs.dnsServers,
-      name = Some(name),
-      //strip any "--" prefixes on parameters (should make this consistent everywhere else)
-      parameters
-        .map({ case (k, v) => if (k.startsWith("--")) (k.replaceFirst("--", ""), v) else (k, v) })
-        ++ containerArgs.extraArgs,
-      parseConstraints(constraintStrings))
+  private def retryingCreateContainer(
+    tid: TransactionId,
+    name: String,
+    image: String,
+    userProvidedImage: Boolean,
+    memory: ByteSize,
+    cpuShares: Int,
+    constraintStrings: Seq[String],
+    retries: Int = 0)(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+    val taskId = taskIdGenerator(instance)
+    MesosTask
+      .create(
+        mesosClientActor,
+        mesosConfig,
+        mesosData,
+        taskId,
+        tid,
+        image = image,
+        userProvidedImage = userProvidedImage,
+        memory = memory,
+        cpuShares = cpuShares,
+        environment = Map("__OW_API_HOST" -> config.wskApiHost),
+        network = containerArgs.network,
+        dnsServers = containerArgs.dnsServers,
+        name = Some(name),
+        //strip any "--" prefixes on parameters (should make this consistent everywhere else)
+        parameters
+          .map({ case (k, v) => if (k.startsWith("--")) (k.replaceFirst("--", ""), v) else (k, v) })
+          ++ containerArgs.extraArgs,
+        parseConstraints(constraintStrings))
+      .recoverWith {
+        //propagate ClusterResourceError, others will be retried if possible
+        case c: ClusterResourceError =>
+          Future.failed(c)
+        case t if retries < mesosConfig.dockerFailureRetries =>
+          val newRetries = retries + 1
+          logging.warn(
+            this,
+            s"retrying ($newRetries of ${mesosConfig.dockerFailureRetries}) after failure: $t ${t.getMessage}")
+          retryingCreateContainer(tid, name, image, userProvidedImage, memory, cpuShares, constraintStrings, newRetries)
+      }
   }
 
   /**
@@ -179,34 +224,77 @@ class MesosContainerFactory(config: WhiskConfig,
 
   /** Cleanups any remaining Containers; should block until complete; should ONLY be run at shutdown. */
   override def cleanup(): Unit = {
-    val complete: Future[Any] = mesosClientActor.ask(Teardown)(mesosConfig.timeouts.teardown)
-    Try(Await.result(complete, mesosConfig.timeouts.teardown))
-      .map(_ => logging.info(this, "Mesos framework teardown completed."))
-      .recover {
-        case _: TimeoutException => logging.error(this, "Mesos framework teardown took too long.")
-        case t: Throwable =>
-          logging.error(this, s"Mesos framework teardown failed : $t}")
+    if (mesosConfig.teardownOnExit) {
+      val complete: Future[Any] = mesosClientActor.ask(Teardown)(mesosConfig.timeouts.teardown)
+      Try(Await.result(complete, mesosConfig.timeouts.teardown))
+        .map(_ => logging.info(this, "Mesos framework teardown completed."))
+        .recover {
+          case _: TimeoutException => logging.error(this, "Mesos framework teardown took too long.")
+          case t: Throwable =>
+            logging.error(this, s"Mesos framework teardown failed : $t}")
+        }
+    } else {
+      val deleting = mesosData.tasks.map { taskId =>
+        //don't wait for kill responses in this case, since it may take longer than allowed to shutdown the container!
+        MesosContainerFactory.destroy(mesosClientActor, mesosConfig, mesosData, taskId._1, false)(
+          TransactionId("mesos"),
+          logging,
+          ec)
       }
+      logging.info(this, s"waiting on cleanup of ${deleting.size} mesos tasks")
+      Try(Await.result(Future.sequence(deleting), 60.seconds))
+        .map(_ => logging.info(this, "Mesos task cleanup completed."))
+        .recover {
+          case _: TimeoutException => logging.error(this, "Mesos task cleanup took too long.")
+          case t: Throwable =>
+            logging.error(this, s"Mesos task cleanup failed : $t}")
+        }
+
+    }
   }
+
+  case class CleanTasks(address: Address)
+
 }
 object MesosContainerFactory {
-  private def createClient(actorSystem: ActorSystem, mesosConfig: MesosConfig): ActorRef =
-    actorSystem.actorOf(
-      MesosClient
-        .props(
-          () => "whisk-containerfactory-" + UUID(),
-          "whisk-containerfactory-framework",
-          mesosConfig.masterUrl,
-          mesosConfig.role,
-          mesosConfig.timeouts.failover,
-          taskStore = new LocalTaskStore,
-          refuseSeconds = mesosConfig.offerRefuseDuration.toSeconds.toDouble,
-          heartbeatMaxFailures = mesosConfig.heartbeatMaxFailures))
-
   val counter = new Counter()
   val startTime = Instant.now.getEpochSecond
-  private def taskIdGenerator(): String = {
-    s"whisk-${counter.next()}-${startTime}"
+  private def taskIdGenerator(instance: InvokerInstanceId): String = {
+    s"whisk-${instance.toInt}-${startTime}-${counter.next()}"
+  }
+  protected[mesos] def destroy(mesosClientActor: ActorRef,
+                               mesosConfig: MesosConfig,
+                               mesosData: MesosData,
+                               taskId: String,
+                               verifyDelete: Boolean = true)(implicit transid: TransactionId,
+                                                             logging: Logging,
+                                                             ec: ExecutionContext): Future[Unit] = {
+    val taskDeleteTimeout = Timeout(mesosConfig.timeouts.taskDelete)
+
+    val start = transid.started(
+      this,
+      LoggingMarkers.INVOKER_MESOS_CMD(MesosTask.KILL_CMD),
+      s"killing mesos taskid $taskId (timeout: ${taskDeleteTimeout})",
+      logLevel = InfoLevel)
+    mesosData.removeTask(taskId)
+
+    //in some cases we don't want to wait for kill completion
+    if (verifyDelete) {
+      mesosClientActor
+        .ask(DeleteTask(taskId))(taskDeleteTimeout)
+        .andThen {
+          case Success(_) => transid.finished(this, start, logLevel = InfoLevel)
+          case Failure(ate: AskTimeoutException) =>
+            transid.failed(this, start, s"task destroy timed out ${ate.getMessage}", ErrorLevel)
+            MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_MESOS_CMD_TIMEOUT(MesosTask.KILL_CMD))
+          case Failure(t) => transid.failed(this, start, s"task destroy failed ${t.getMessage}", ErrorLevel)
+        }
+        .map(_ => {})
+    } else {
+      mesosClientActor ! DeleteTask(taskId)
+      transid.finished(this, start, logLevel = InfoLevel)
+      Future.successful({})
+    }
   }
 }
 
@@ -216,5 +304,5 @@ object MesosContainerFactoryProvider extends ContainerFactoryProvider {
                         config: WhiskConfig,
                         instance: InvokerInstanceId,
                         parameters: Map[String, Set[String]]): ContainerFactory =
-    new MesosContainerFactory(config, actorSystem, logging, parameters)
+    new MesosContainerFactory(config, actorSystem, logging, instance, parameters)
 }
