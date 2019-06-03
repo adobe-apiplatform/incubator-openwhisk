@@ -50,8 +50,7 @@ import akka.management.AkkaManagement
 import akka.management.cluster.bootstrap.ClusterBootstrap
 import akka.pattern.ask
 import akka.util.Timeout
-//import com.adobe.api.platform.runtime.mesos.DistributedDataTaskStore
-import com.adobe.api.platform.runtime.mesos.LocalTaskStore
+import com.adobe.api.platform.runtime.mesos.DistributedDataTaskStore
 import com.adobe.api.platform.runtime.mesos.MesosAgentStats
 import com.adobe.api.platform.runtime.mesos.MesosClient
 import com.adobe.api.platform.runtime.mesos.SubscribeComplete
@@ -184,7 +183,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
       mesosConfig.masterUrl,
       mesosConfig.role,
       mesosConfig.timeouts.failover,
-      taskStore = new LocalTaskStore(), //must use DistributedTaskStore for cluster failover reconciliation; currently we see crashing in this case though https://jira.corp.adobe.com/browse/RUNNER-2424
+      taskStore = new DistributedDataTaskStore(actorSystem), //must use DistributedTaskStore for cluster failover reconciliation
       refuseSeconds = mesosConfig.offerRefuseDuration.toSeconds.toDouble,
       heartbeatMaxFailures = mesosConfig.heartbeatMaxFailures,
       autoSubscribe = true, //must be true for cluster usage so when singleton client fails, new one will re-subscribe automatically
