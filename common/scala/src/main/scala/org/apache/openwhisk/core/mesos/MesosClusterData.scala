@@ -19,7 +19,6 @@ package org.apache.openwhisk.core.mesos
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.ActorSystem
-import akka.actor.Address
 import akka.actor.PoisonPill
 import akka.actor.Props
 import akka.cluster.Cluster
@@ -28,6 +27,7 @@ import akka.cluster.ClusterEvent.MemberRemoved
 import akka.cluster.ClusterEvent.MemberUp
 import akka.cluster.ClusterEvent.UnreachableMember
 import akka.cluster.MemberStatus
+import akka.cluster.UniqueAddress
 import akka.cluster.ddata.DistributedData
 import akka.cluster.ddata.LWWRegister
 import akka.cluster.ddata.LWWRegisterKey
@@ -50,8 +50,7 @@ import akka.management.AkkaManagement
 import akka.management.cluster.bootstrap.ClusterBootstrap
 import akka.pattern.ask
 import akka.util.Timeout
-//import com.adobe.api.platform.runtime.mesos.DistributedDataTaskStore
-import com.adobe.api.platform.runtime.mesos.LocalTaskStore
+import com.adobe.api.platform.runtime.mesos.DistributedDataTaskStore
 import com.adobe.api.platform.runtime.mesos.MesosAgentStats
 import com.adobe.api.platform.runtime.mesos.MesosClient
 import com.adobe.api.platform.runtime.mesos.SubscribeComplete
@@ -70,11 +69,11 @@ case class SetClusterFrameworkId(frameworkId: String)
 case class SetClusterStats(stats: MesosAgentStats)
 case class AddTask(taskId: String)
 case class RemoveTask(taskId: String)
-case class GetTasks(address: Address)
-case class CleanTasks(address: Address)
+case class GetTasks(address: UniqueAddress)
+case class CleanTasks(address: UniqueAddress)
 
 //data
-case class MemberTask(address: Address, taskId: String)
+case class MemberTask(address: UniqueAddress, taskId: String)
 
 class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, logging: Logging) extends MesosData {
   override val autoSubscribe: Boolean = true
@@ -105,7 +104,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
       .props(
         Props(new Actor {
           var cleanedAddresses
-            : Map[Address, Instant] = Map.empty //track addresses and expiration time (will prune periodically to avoid growing the map)
+            : Map[UniqueAddress, Instant] = Map.empty //track addresses and expiration time (will prune periodically to avoid growing the map)
           case object PruneCleaned
           //periodically prune cleaned addresses
           context.system.scheduler.schedule(10.seconds, 300.seconds, self, PruneCleaned)
@@ -137,13 +136,13 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
     }
     override def receive: Receive = {
       case MemberUp(member) =>
-        if (cluster.selfAddress == member.address) {
+        if (cluster.selfUniqueAddress == member.uniqueAddress) {
           completeInit()
         }
       case MemberRemoved(member, _) =>
-        cleaner ! CleanTasks(member.address)
+        cleaner ! CleanTasks(member.uniqueAddress)
       case UnreachableMember(member) =>
-        cleaner ! CleanTasks(member.address)
+        cleaner ! CleanTasks(member.uniqueAddress)
       case m =>
         logging.debug(this, s"unknown message $m")
     }
@@ -155,7 +154,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
     initPromise.success(client)
   }
 
-  private def removeTasks(addr: Address) = {
+  private def removeTasks(addr: UniqueAddress) = {
     //if client was not initialized, we will not even try to delete tasks
     mesosClientActor.foreach { mesosClient =>
       dataManager
@@ -184,7 +183,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
       mesosConfig.masterUrl,
       mesosConfig.role,
       mesosConfig.timeouts.failover,
-      taskStore = new LocalTaskStore(), //must use DistributedTaskStore for cluster failover reconciliation; currently we see crashing in this case though https://jira.corp.adobe.com/browse/RUNNER-2424
+      taskStore = new DistributedDataTaskStore(actorSystem), //must use DistributedTaskStore for cluster failover reconciliation
       refuseSeconds = mesosConfig.offerRefuseDuration.toSeconds.toDouble,
       heartbeatMaxFailures = mesosConfig.heartbeatMaxFailures,
       autoSubscribe = true, //must be true for cluster usage so when singleton client fails, new one will re-subscribe automatically
@@ -248,7 +247,7 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
 class MesosClusterListener(clusterData: MesosClusterData)(implicit logging: Logging) extends Actor {
 
   implicit val node = Cluster(context.system)
-  val addr = node.selfAddress
+  val addr = node.selfUniqueAddress
   val replicator = DistributedData(context.system).replicator
 
   val FrameworkIdKey = LWWRegisterKey[String]("mesosFrameworkId")
@@ -272,9 +271,9 @@ class MesosClusterListener(clusterData: MesosClusterData)(implicit logging: Logg
     case RemoveTask(task) =>
       replicator ! Update(MemberTasksKey, ORSet.empty[MemberTask], WriteLocal)(_ - MemberTask(addr, task))
     //Get Handlers
-    case GetTasks(address: Address) =>
+    case GetTasks(address: UniqueAddress) =>
       replicator ! Get(MemberTasksKey, ReadLocal, Some((sender(), address)))
-    case g @ GetSuccess(MemberTasksKey, Some((replyTo: ActorRef, address: Address))) =>
+    case g @ GetSuccess(MemberTasksKey, Some((replyTo: ActorRef, address: UniqueAddress))) =>
       val value = g.get(MemberTasksKey).elements.filter(_.address == address)
       replyTo ! value
     case NotFound(key, _) =>
