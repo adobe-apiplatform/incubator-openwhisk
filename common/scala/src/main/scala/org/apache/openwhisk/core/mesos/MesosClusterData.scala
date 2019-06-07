@@ -249,6 +249,7 @@ class MesosClusterListener(clusterData: MesosClusterData)(implicit logging: Logg
   implicit val node = Cluster(context.system)
   val addr = node.selfUniqueAddress
   val replicator = DistributedData(context.system).replicator
+  private implicit val selfAddress = DistributedData(context.system).selfUniqueAddress
 
   val FrameworkIdKey = LWWRegisterKey[String]("mesosFrameworkId")
   val MemberTasksKey = ORSetKey[MemberTask]("mesosTasks")
@@ -262,14 +263,15 @@ class MesosClusterListener(clusterData: MesosClusterData)(implicit logging: Logg
   override def receive: Receive = {
     //Replication events
     case SetClusterFrameworkId(frameworkId) =>
-      replicator ! Update(FrameworkIdKey, LWWRegister[String](null), WriteLocal)(reg => reg.withValue(frameworkId))
+      replicator ! Update(FrameworkIdKey, LWWRegister.create[String](null), WriteLocal)(reg =>
+        reg.withValueOf(frameworkId))
     case SetClusterStats(stats) =>
-      replicator ! Update(ClusterStatsKey, LWWRegister[MesosAgentStats](MesosAgentStats(Map.empty)), WriteLocal)(reg =>
-        reg.withValue(stats))
+      replicator ! Update(ClusterStatsKey, LWWRegister.create[MesosAgentStats](MesosAgentStats(Map.empty)), WriteLocal)(
+        reg => reg.withValueOf(stats))
     case AddTask(task) =>
-      replicator ! Update(MemberTasksKey, ORSet.empty[MemberTask], WriteLocal)(_ + MemberTask(addr, task))
+      replicator ! Update(MemberTasksKey, ORSet.empty[MemberTask], WriteLocal)(_ :+ MemberTask(addr, task))
     case RemoveTask(task) =>
-      replicator ! Update(MemberTasksKey, ORSet.empty[MemberTask], WriteLocal)(_ - MemberTask(addr, task))
+      replicator ! Update(MemberTasksKey, ORSet.empty[MemberTask], WriteLocal)(_.remove(MemberTask(addr, task)))
     //Get Handlers
     case GetTasks(address: UniqueAddress) =>
       replicator ! Get(MemberTasksKey, ReadLocal, Some((sender(), address)))
