@@ -197,14 +197,14 @@ class MesosTask(override protected val id: ContainerId,
 
   /** Stops the container from consuming CPU cycles. */
   override def suspend()(implicit transid: TransactionId): Future[Unit] = {
-    super.suspend()
-    // suspend not supported (just return result from super)
+    // suspend not supported; do not dispose of http connections either
+    Future.successful(Unit)
   }
 
   /** Dual of halt. */
   override def resume()(implicit transid: TransactionId): Future[Unit] = {
-    super.resume()
-    // resume not supported (just return result from super)
+    // resume not supported; do not dispose of http connections either
+    Future.successful(Unit)
   }
 
   /** Completely destroys this instance of the container. */
