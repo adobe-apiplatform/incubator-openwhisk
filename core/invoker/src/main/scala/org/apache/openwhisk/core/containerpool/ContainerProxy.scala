@@ -36,6 +36,7 @@ import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.invoker.InvokerReactive.ActiveAck
 import org.apache.openwhisk.http.Messages
+import scala.collection.immutable.Queue
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.{Failure, Success}
@@ -236,6 +237,8 @@ class ContainerProxy(
   var activeCount = 0
   //track the first run for easily referring to the action being initialized (it may fail)
   var firstRun: Option[Run] = None
+  //track Run messages sent during init (Warming, WarmingCold states)
+  var warmingQueue: Queue[Run] = Queue.empty
   startWith(Uninitialized, NoData())
 
   when(Uninitialized) {
@@ -375,7 +378,9 @@ class ContainerProxy(
       }
     case Event(job: Run, data: WarmedData)
         if activeCount >= data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if we are over concurrency limit, and not a failure on resume
-      logging.warn(this, s"buffering for container ${data.container}; ${activeCount} activations in flight")
+      logging.warn(
+        this,
+        s"buffering for container ${data.container}; ${activeCount} activations in flight; max is ${data.action.limits.concurrency.maxConcurrent}")
       runBuffer = runBuffer.enqueue(job)
       stay()
     case Event(job: Run, data: WarmedData)
@@ -387,7 +392,13 @@ class ContainerProxy(
         .map(_ => RunCompleted)
         .pipeTo(self)
       stay() using data
-
+    case Event(job: Run, data: PreWarmedData) //for concurrent activations arriving while init is going on, queue them for immediate+concurrent execution after init completes
+        if job.action.limits.concurrency.maxConcurrent > 1 &&
+          activeCount < job.action.limits.concurrency.maxConcurrent &&
+          !rescheduleJob => //if there was a delay, and not a failure on resume, skip the run
+      implicit val transid = job.msg.transid
+      warmingQueue = warmingQueue.enqueue(job)
+      stay() using data
     // Failed after /init (the first run failed)
     case Event(_: FailureMessage, data: PreWarmedData) =>
       activeCount -= 1
@@ -573,7 +584,7 @@ class ContainerProxy(
 
     // Only initialize iff we haven't yet warmed the container
     val initialize = stateData match {
-      case data: WarmedData =>
+      case _: WarmedData =>
         Future.successful(None)
       case _ =>
         container
@@ -586,6 +597,11 @@ class ContainerProxy(
         //immediately setup warmedData for use (before first execution) so that concurrent actions can use it asap
         if (initInterval.isDefined) {
           self ! InitCompleted(WarmedData(container, job.msg.user.namespace.name, job.action, Instant.now, 1))
+        }
+        //concurrency support: in case anything arrived in warming queue (during init + concurrent runs), execute them now
+        if (warmingQueue.nonEmpty) {
+          warmingQueue.foreach(self ! _)
+          warmingQueue = Queue.empty
         }
         val parameters = job.msg.content getOrElse JsObject.empty
 
