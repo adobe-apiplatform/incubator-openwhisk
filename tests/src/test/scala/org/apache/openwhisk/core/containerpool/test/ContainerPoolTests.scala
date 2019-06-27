@@ -34,6 +34,7 @@ import akka.testkit.ImplicitSender
 import akka.testkit.TestActorRef
 import akka.testkit.TestKit
 import akka.testkit.TestProbe
+import common.StreamLogging
 import common.WhiskProperties
 import java.util.concurrent.atomic.AtomicInteger
 import org.apache.openwhisk.common.PrintStreamLogging
@@ -59,7 +60,8 @@ class ContainerPoolTests
     with FlatSpecLike
     with Matchers
     with BeforeAndAfterAll
-    with MockFactory {
+    with MockFactory
+    with StreamLogging {
 
   override def afterAll = TestKit.shutdownActorSystem(system)
 
@@ -135,7 +137,7 @@ class ContainerPoolTests
 
   val instanceId = InvokerInstanceId(0, userMemory = 1024.MB)
   behavior of "ContainerPool"
-
+  val resMgrFactory = (pool: ActorRef) => new LocalContainerResourceManager(pool)
   /*
    * CONTAINER SCHEDULING
    *
@@ -146,8 +148,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
     // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
     pool ! runMessage
     containers(0).expectMsg(runMessage)
@@ -162,8 +164,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
     // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
     pool ! runMessage
     containers(0).expectMsg(runMessage)
@@ -179,8 +181,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     // Note that the container doesn't respond, thus it's not free to take work
@@ -194,7 +196,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 slot
-    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref, resMgrFactory))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     containers(0).send(pool, NeedWork(warmedData()))
@@ -210,7 +213,7 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with slots for 2 actions with default memory limit.
-    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(512.MB), feed.ref))
+    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(512.MB), feed.ref, resMgrFactory))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     pool ! runMessageDifferentAction // 2 * stdMemory taken -> full
@@ -232,8 +235,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 active slot but 2 slots in total
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref, resMgrFactory))
 
     // Run the first container
     pool ! runMessage
@@ -259,7 +262,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 slot
-    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref, resMgrFactory))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     containers(0).send(pool, NeedWork(warmedData()))
@@ -274,7 +278,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // a pool with only 1 slot
-    val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref, resMgrFactory))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
     containers(0).send(pool, RescheduleJob) // emulate container failure ...
@@ -287,8 +292,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref, resMgrFactory))
 
     // Start first action
     pool ! runMessage // 1 * stdMemory taken
@@ -322,7 +327,13 @@ class ContainerPoolTests
     val pool =
       system.actorOf(
         ContainerPool
-          .props(instanceId, factory, poolConfig(0.MB), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
+          .props(
+            instanceId,
+            factory,
+            poolConfig(0.MB),
+            feed.ref,
+            resMgrFactory,
+            List(PrewarmingConfig(1, exec, memoryLimit))))
     containers(0).expectMsg(Start(exec, memoryLimit))
   }
 
@@ -338,6 +349,7 @@ class ContainerPoolTests
             factory,
             poolConfig(MemoryLimit.STD_MEMORY),
             feed.ref,
+            resMgrFactory,
             List(PrewarmingConfig(1, exec, memoryLimit))))
     containers(0).expectMsg(Start(exec, memoryLimit))
     containers(0).send(pool, NeedWork(preWarmedData(exec.kind)))
@@ -358,6 +370,7 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.STD_MEMORY),
           feed.ref,
+          resMgrFactory,
           List(PrewarmingConfig(1, alternativeExec, memoryLimit))))
     containers(0).expectMsg(Start(alternativeExec, memoryLimit)) // container0 was prewarmed
     containers(0).send(pool, NeedWork(preWarmedData(alternativeExec.kind)))
@@ -379,6 +392,7 @@ class ContainerPoolTests
             factory,
             poolConfig(MemoryLimit.STD_MEMORY),
             feed.ref,
+            resMgrFactory,
             List(PrewarmingConfig(1, exec, alternativeLimit))))
     containers(0).expectMsg(Start(exec, alternativeLimit)) // container0 was prewarmed
     containers(0).send(pool, NeedWork(preWarmedData(exec.kind, alternativeLimit)))
@@ -393,8 +407,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
     // container0 is created and used
     pool ! runMessage
@@ -424,7 +438,8 @@ class ContainerPoolTests
 
     // Pool with 512 MB usermemory
     val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+      system.actorOf(
+        ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref, resMgrFactory))
 
     // Send action that blocks the pool
     pool ! runMessageLarge
@@ -456,8 +471,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     // Pool with 512 MB usermemory
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref, resMgrFactory))
 
     // Send 4 actions to the ContainerPool (Action 0, Action 2 and Action 3 with each 265 MB and Action 1 with 512 MB)
     pool ! runMessage
@@ -511,8 +526,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
     // container0 is created and used
     pool ! runMessageConcurrent
@@ -536,8 +551,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
     // container0 is created and used
     pool ! runMessageConcurrent
@@ -553,8 +568,8 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref))
+    val pool = system.actorOf(
+      ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
     // container0 is created and used
     pool ! runMessageConcurrent
@@ -604,8 +619,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
     //prewarms are not started immediately
     containers(0).expectNoMessage
     //prewarms must be started explicitly (e.g. by the ContainerResourceManager)
@@ -648,8 +663,9 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory),
           feed.ref,
-          List(PrewarmingConfig(3, exec, memoryLimit)), //configure 3 prewarms, but only allow 2 to start
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(3, exec, memoryLimit)) //configure 3 prewarms, but only allow 2 to start
+        ))
     //prewarms are not started immediately
     containers(0).expectNoMessage
 
@@ -679,8 +695,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
 
     (resMgr
       .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
@@ -718,8 +734,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory, idleGrace = idleGrace),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
     val warmed = warmedData()
     (resMgr
       .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
@@ -829,8 +845,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory, true),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
 
     //these will get buffered since allowLaunch is false
     pool ! run1
@@ -869,8 +885,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory, true),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
 
     //these will get buffered since allowLaunch is false
     pool ! run1
@@ -896,8 +912,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
     val warmed = warmedData()
     (resMgr
       .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
@@ -934,8 +950,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
     (resMgr
       .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
       .expects(memoryLimit, 0, *, false)
@@ -969,8 +985,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory, idleGrace = idleGrace),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
     val warmed = warmedData() //will only be released if lastUsed is after idleGrace
 
     (resMgr
@@ -1037,8 +1053,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory, idleGrace = idleGrace),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
     val warmed = warmedData(lastUsed = Instant.now().minusSeconds(idleGrace.toSeconds - 3)) //will only be released if lastUsed is after idleGrace
 
     pool ! runMessageConcurrent
@@ -1080,8 +1096,8 @@ class ContainerPoolTests
           factory,
           poolConfig(MemoryLimit.stdMemory, true),
           feed.ref,
-          List(PrewarmingConfig(1, exec, memoryLimit)),
-          Some(resMgr)))
+          _ => resMgr,
+          List(PrewarmingConfig(1, exec, memoryLimit))))
 
     val run1 = createRunMessage(action, invocationNamespace)
     val run2 = createRunMessage(action, invocationNamespace)
