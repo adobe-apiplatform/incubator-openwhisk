@@ -71,7 +71,7 @@ trait Container {
 
   implicit protected val as: ActorSystem
   protected val id: ContainerId
-  protected val addr: ContainerAddress
+  protected[core] val addr: ContainerAddress
   protected implicit val logging: Logging
   protected implicit val ec: ExecutionContext
 
@@ -81,6 +81,8 @@ trait Container {
   /** maxConcurrent+timeout are cached during first init, so that resuming connections can reference */
   protected var containerHttpMaxConcurrent: Int = 1
   protected var containerHttpTimeout: FiniteDuration = 60.seconds
+
+  def containerId: ContainerId = id
 
   /** Stops the container from consuming CPU cycles. NOT thread-safe - caller must synchronize. */
   def suspend()(implicit transid: TransactionId): Future[Unit] = {
@@ -243,6 +245,9 @@ case class BlackboxStartupError(msg: String) extends ContainerStartupError(msg)
 
 /** Indicates an error while initializing a container */
 case class InitializationError(interval: Interval, response: ActivationResponse) extends Exception(response.toString)
+
+/** Indicates a resource availability error */
+case class ClusterResourceError(required: ByteSize, available: ByteSize) extends ContainerError("inadequate resources")
 
 case class Interval(start: Instant, end: Instant) {
   def duration = Duration.create(end.toEpochMilli() - start.toEpochMilli(), MILLISECONDS)

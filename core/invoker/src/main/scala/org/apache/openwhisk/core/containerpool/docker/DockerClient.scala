@@ -87,7 +87,7 @@ class DockerClient(dockerHost: Option[String] = None,
   // Determines how to run docker. Failure to find a Docker binary implies
   // a failure to initialize this instance of DockerClient.
   protected val dockerCmd: Seq[String] = {
-    val alternatives = List("/usr/bin/docker", "/usr/local/bin/docker")
+    val alternatives = List("/usr/bin/docker", "/usr/local/bin/docker") ++ executableAlternatives
 
     val dockerBin = Try {
       alternatives.find(a => Files.isExecutable(Paths.get(a))).get
@@ -98,6 +98,8 @@ class DockerClient(dockerHost: Option[String] = None,
     val host = dockerHost.map(host => Seq("--host", s"tcp://$host")).getOrElse(Seq.empty[String])
     Seq(dockerBin) ++ host
   }
+
+  protected def executableAlternatives: List[String] = List.empty
 
   // Invoke docker CLI to determine client version.
   // If the docker client version cannot be determined, an exception will be thrown and instance initialization will fail.
@@ -176,7 +178,7 @@ class DockerClient(dockerHost: Option[String] = None,
     val filterArgs = filters.flatMap { case (attr, value) => Seq("--filter", s"$attr=$value") }
     val allArg = if (all) Seq("--all") else Seq.empty[String]
     val cmd = Seq("ps", "--quiet", "--no-trunc") ++ allArg ++ filterArgs
-    runCmd(cmd, config.timeouts.ps).map(_.lines.toSeq.map(ContainerId.apply))
+    runCmd(cmd, config.timeouts.ps).map(_.linesIterator.toSeq.map(ContainerId.apply))
   }
 
   /**
