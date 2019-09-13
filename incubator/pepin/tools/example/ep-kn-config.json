@@ -1,0 +1,7 @@
+{
+  "stemcellcount": 2,
+  "kubeconfigpath": "/home/mcweeney/.kube/config",
+  "actionnamespace": "ow-pepin",
+  "defaultimage": "tysonnorris/fasthello-go",
+  "clustergateway": "192.168.99.100:32236"
+}

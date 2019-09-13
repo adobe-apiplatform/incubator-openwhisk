@@ -1,0 +1,8 @@
+{
+  "stemcellcount": 2,
+  "garbagecollectionduration": "5s",
+  "kubeconfigpath": "./config",
+  "actionnamespace": "ow-pepin",
+  "defaultimage": "tysonnorris/fasthello-go",
+  "clustergateway": "192.168.99.100:32236"
+}
