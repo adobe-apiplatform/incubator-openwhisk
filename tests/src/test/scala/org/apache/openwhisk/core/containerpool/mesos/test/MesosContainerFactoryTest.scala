@@ -69,7 +69,7 @@ import scala.concurrent.Await
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import org.apache.openwhisk.utils.retry
-
+import org.scalatest.BeforeAndAfterAll
 import scala.collection.JavaConverters._
 
 @RunWith(classOf[JUnitRunner])
@@ -78,6 +78,7 @@ class MesosContainerFactoryTest
     with FlatSpecLike
     with Matchers
     with BeforeAndAfterEach
+    with BeforeAndAfterAll
     with ScalaFutures
     with MockFactory {
 
@@ -319,6 +320,7 @@ class MesosContainerFactoryTest
       Map("--arg1" -> Set("v1", "v2"), "--arg2" -> Set("v3", "v4"), "other" -> Set("v5", "v6")),
       new ContainerArgsConfig(
         "bridge",
+        Seq.empty,
         Seq.empty,
         Seq.empty,
         Seq.empty,

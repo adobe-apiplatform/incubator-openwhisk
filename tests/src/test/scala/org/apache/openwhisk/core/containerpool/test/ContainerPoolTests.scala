@@ -147,7 +147,7 @@ class ContainerPoolTests
   it should "reuse a warm container" in within(timeout) {
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
-    // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
+    // Actions are created with default memory limit (MemoryLimit.STD_MEMORY). This means 4 actions can be scheduled.
     val pool = system.actorOf(
       ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
@@ -163,7 +163,7 @@ class ContainerPoolTests
   it should "reuse a warm container when action is the same even if revision changes" in within(timeout) {
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
-    // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
+    // Actions are created with default memory limit (MemoryLimit.STD_MEMORY). This means 4 actions can be scheduled.
     val pool = system.actorOf(
       ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
 
@@ -180,7 +180,7 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
 
-    // Actions are created with default memory limit (MemoryLimit.stdMemory). This means 4 actions can be scheduled.
+    // Actions are created with default memory limit (MemoryLimit.STD_MEMORY). This means 4 actions can be scheduled.
     val pool = system.actorOf(
       ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 4), feed.ref, resMgrFactory))
     pool ! runMessage
@@ -216,15 +216,15 @@ class ContainerPoolTests
     val pool = system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(512.MB), feed.ref, resMgrFactory))
     pool ! runMessage
     containers(0).expectMsg(runMessage)
-    pool ! runMessageDifferentAction // 2 * stdMemory taken -> full
+    pool ! runMessageDifferentAction // 2 * STD_MEMORY taken -> full
     containers(1).expectMsg(runMessageDifferentAction)
 
-    containers(0).send(pool, NeedWork(warmedData())) // first action finished -> 1 * stdMemory taken
+    containers(0).send(pool, NeedWork(warmedData())) // first action finished -> 1 * STD_MEMORY taken
     feed.expectMsg(MessageFeed.Processed)
-    containers(1).send(pool, NeedWork(warmedData())) // second action finished -> 1 * stdMemory taken
+    containers(1).send(pool, NeedWork(warmedData())) // second action finished -> 1 * STD_MEMORY taken
     feed.expectMsg(MessageFeed.Processed)
 
-    pool ! runMessageLarge // need to remove both action to make space for the large action (needs 2 * stdMemory)
+    pool ! runMessageLarge // need to remove both action to make space for the large action (needs 2 * STD_MEMORY)
     containers(0).expectMsg(Remove)
     containers(1).expectMsg(Remove)
     containers(2).expectMsg(runMessageLarge)
@@ -296,7 +296,7 @@ class ContainerPoolTests
       ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref, resMgrFactory))
 
     // Start first action
-    pool ! runMessage // 1 * stdMemory taken
+    pool ! runMessage // 1 * STD_MEMORY taken
     containers(0).expectMsg(runMessage)
 
     // Send second action to the pool
@@ -612,7 +612,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory),
+          poolConfig(MemoryLimit.STD_MEMORY),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -656,7 +656,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory),
+          poolConfig(MemoryLimit.STD_MEMORY),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(3, exec, memoryLimit)) //configure 3 prewarms, but only allow 2 to start
@@ -688,7 +688,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory),
+          poolConfig(MemoryLimit.STD_MEMORY),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -727,7 +727,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory, idleGrace = idleGrace),
+          poolConfig(MemoryLimit.STD_MEMORY, idleGrace = idleGrace),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -772,7 +772,7 @@ class ContainerPoolTests
 //        .props(
 //          instanceId,
 //          factory,
-//          poolConfig(MemoryLimit.stdMemory, true),
+//          poolConfig(MemoryLimit.STD_MEMORY, true),
 //          feed.ref,
 //          List(PrewarmingConfig(1, exec, memoryLimit)),
 //          Some(resMgr)))
@@ -838,7 +838,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory, true),
+          poolConfig(MemoryLimit.STD_MEMORY, true),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -882,7 +882,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory, true),
+          poolConfig(MemoryLimit.STD_MEMORY, true),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -912,7 +912,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory),
+          poolConfig(MemoryLimit.STD_MEMORY),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -949,7 +949,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory),
+          poolConfig(MemoryLimit.STD_MEMORY),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -984,7 +984,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory, idleGrace = idleGrace),
+          poolConfig(MemoryLimit.STD_MEMORY, idleGrace = idleGrace),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -1052,7 +1052,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory, idleGrace = idleGrace),
+          poolConfig(MemoryLimit.STD_MEMORY, idleGrace = idleGrace),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
@@ -1095,7 +1095,7 @@ class ContainerPoolTests
         .props(
           instanceId,
           factory,
-          poolConfig(MemoryLimit.stdMemory, true),
+          poolConfig(MemoryLimit.STD_MEMORY, true),
           feed.ref,
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
