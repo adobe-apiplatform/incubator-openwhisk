@@ -604,7 +604,8 @@ class ContainerPoolTests
       override def canLaunch(size: ByteSize,
                              poolMemory: Long,
                              poolConfig: ContainerPoolConfig,
-                             prewarm: Boolean): Boolean = true
+                             prewarm: Boolean,
+                             blackbox: Boolean): Boolean = true
     }
 
     val pool = system.actorOf(
@@ -633,7 +634,7 @@ class ContainerPoolTests
     val feed = TestProbe()
     var reservations = 0;
     val resMgr = new ContainerResourceManager {
-      override def addReservation(ref: ActorRef, byteSize: ByteSize): Unit = {
+      override def addReservation(ref: ActorRef, byteSize: ByteSize, blackbox: Boolean): Unit = {
         reservations += 1
       }
 
@@ -641,7 +642,8 @@ class ContainerPoolTests
       override def canLaunch(size: ByteSize,
                              poolMemory: Long,
                              poolConfig: ContainerPoolConfig,
-                             prewarm: Boolean): Boolean = {
+                             prewarm: Boolean,
+                             blackbox: Boolean): Boolean = {
 
         if (reservations >= 2) {
           false
@@ -694,11 +696,11 @@ class ContainerPoolTests
           List(PrewarmingConfig(1, exec, memoryLimit))))
 
     (resMgr
-      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
-      .expects(memoryLimit, 0, *, false)
+      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean, _: Boolean))
+      .expects(memoryLimit, 0, *, false, false)
       .returning(true)
       .repeat(2)
-    (resMgr.addReservation(_: ActorRef, _: ByteSize)).expects(*, memoryLimit)
+    (resMgr.addReservation(_: ActorRef, _: ByteSize, _: Boolean)).expects(*, memoryLimit, *)
     (resMgr.updateUnused(_: Map[ActorRef, ContainerData])).expects(Map.empty[ActorRef, ContainerData])
     (() => resMgr.activationStartLogMessage()).expects().returning("")
     //expect a request for space
@@ -733,12 +735,12 @@ class ContainerPoolTests
           List(PrewarmingConfig(1, exec, memoryLimit))))
     val warmed = warmedData()
     (resMgr
-      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
-      .expects(memoryLimit, 0, *, false)
+      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean, _: Boolean))
+      .expects(memoryLimit, 0, *, false, false)
       .returning(true)
       .repeat(2)
 
-    (resMgr.addReservation(_: ActorRef, _: ByteSize)).expects(*, memoryLimit)
+    (resMgr.addReservation(_: ActorRef, _: ByteSize, _: Boolean)).expects(*, memoryLimit, *)
 
     (resMgr.updateUnused(_: Map[ActorRef, ContainerData])).expects(Map.empty[ActorRef, ContainerData]).atLeastOnce()
     (() => resMgr.activationStartLogMessage()).expects().returning("").repeat(2)
@@ -826,7 +828,8 @@ class ContainerPoolTests
       override def canLaunch(size: ByteSize,
                              poolMemory: Long,
                              poolConfig: ContainerPoolConfig,
-                             prewarm: Boolean): Boolean = {
+                             prewarm: Boolean,
+                             blackbox: Boolean): Boolean = {
         allowLaunch
       }
     }
@@ -870,7 +873,8 @@ class ContainerPoolTests
       override def canLaunch(size: ByteSize,
                              poolMemory: Long,
                              poolConfig: ContainerPoolConfig,
-                             prewarm: Boolean): Boolean = {
+                             prewarm: Boolean,
+                             blackbox: Boolean): Boolean = {
         allowLaunch
       }
     }
@@ -917,12 +921,12 @@ class ContainerPoolTests
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
     (resMgr
-      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
-      .expects(memoryLimit, 0, *, false)
+      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean, _: Boolean))
+      .expects(memoryLimit, 0, *, false, false)
       .returning(true)
       .repeat(2)
 
-    (resMgr.addReservation(_: ActorRef, _: ByteSize)).expects(*, memoryLimit)
+    (resMgr.addReservation(_: ActorRef, _: ByteSize, _: Boolean)).expects(*, memoryLimit, *)
 
     //(resMgr.updateUnused(_: Map[ActorRef, ContainerData])).expects(Map.empty[ActorRef, ContainerData]).atLeastOnce()
     (() => resMgr.activationStartLogMessage()).expects().returning("").repeat(2)
@@ -954,12 +958,12 @@ class ContainerPoolTests
           _ => resMgr,
           List(PrewarmingConfig(1, exec, memoryLimit))))
     (resMgr
-      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
-      .expects(memoryLimit, 0, *, false)
+      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean, _: Boolean))
+      .expects(memoryLimit, 0, *, false, false)
       .returning(true) //return true, but simulate unavailable resources by sending NeedResources back
       .repeat(2)
 
-    (resMgr.addReservation(_: ActorRef, _: ByteSize)).expects(*, memoryLimit)
+    (resMgr.addReservation(_: ActorRef, _: ByteSize, _: Boolean)).expects(*, memoryLimit, *)
 
     (() => resMgr.activationStartLogMessage()).expects().returning("").repeat(1)
 
@@ -991,12 +995,12 @@ class ContainerPoolTests
     val warmed = warmedData() //will only be released if lastUsed is after idleGrace
 
     (resMgr
-      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
-      .expects(memoryLimit, 0, *, false)
+      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean, _: Boolean))
+      .expects(memoryLimit, 0, *, false, false)
       .returning(true)
       .repeat(2)
 
-    (resMgr.addReservation(_: ActorRef, _: ByteSize)).expects(*, memoryLimit)
+    (resMgr.addReservation(_: ActorRef, _: ByteSize, _: Boolean)).expects(*, memoryLimit, *)
 
     (resMgr.updateUnused(_: Map[ActorRef, ContainerData])).expects(Map.empty[ActorRef, ContainerData]).atLeastOnce()
     (() => resMgr.activationStartLogMessage()).expects().returning("").repeat(2)
@@ -1042,7 +1046,8 @@ class ContainerPoolTests
       override def canLaunch(size: ByteSize,
                              poolMemory: Long,
                              poolConfig: ContainerPoolConfig,
-                             prewarm: Boolean): Boolean = {
+                             prewarm: Boolean,
+                             blackbox: Boolean): Boolean = {
         true
       }
     }
@@ -1083,7 +1088,8 @@ class ContainerPoolTests
       override def canLaunch(size: ByteSize,
                              poolMemory: Long,
                              poolConfig: ContainerPoolConfig,
-                             prewarm: Boolean): Boolean = {
+                             prewarm: Boolean,
+                             blackbox: Boolean): Boolean = {
         allowLaunch
       }
     }

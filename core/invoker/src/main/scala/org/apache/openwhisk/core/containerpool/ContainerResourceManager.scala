@@ -24,8 +24,12 @@ trait ContainerResourceManager {
   def rescheduleLogMessage(): String = ""
 
   def updateUnused(unused: Map[ActorRef, ContainerData]) = {}
-  def addReservation(ref: ActorRef, byteSize: ByteSize): Unit = {}
+  def addReservation(ref: ActorRef, byteSize: ByteSize, blackbox: Boolean): Unit = {}
   def releaseReservation(ref: ActorRef): Unit = {}
   def requestSpace(size: ByteSize): Unit = {}
-  def canLaunch(size: ByteSize, poolMemory: Long, poolConfig: ContainerPoolConfig, prewarm: Boolean = false): Boolean
+  def canLaunch(size: ByteSize,
+                poolMemory: Long,
+                poolConfig: ContainerPoolConfig,
+                prewarm: Boolean = false,
+                blackbox: Boolean): Boolean
 }

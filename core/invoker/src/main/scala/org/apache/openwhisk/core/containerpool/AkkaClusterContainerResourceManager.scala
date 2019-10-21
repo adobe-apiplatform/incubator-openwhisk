@@ -119,22 +119,34 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
   private var clusterResourcesAvailable
     : Boolean = false //track to log whenever there is a switch from cluster resources being available to not being available
 
-  def canLaunch(memory: ByteSize, poolMemory: Long, poolConfig: ContainerPoolConfig, prewarm: Boolean): Boolean = {
+  def canLaunch(memory: ByteSize,
+                poolMemory: Long,
+                poolConfig: ContainerPoolConfig,
+                prewarm: Boolean,
+                blackbox: Boolean): Boolean = {
 
     if (allowMoreStarts(poolConfig)) {
-      val localRes = localReservations.values.map(_.size) //active local reservations
-      val remoteRes = remoteReservations.values.toList.flatten.map(_.size) //remote/stale reservations
+      //only consider blackbox/nonblackbox reservations to match this invoker's usage
+      val localRes = localReservations.filter(_._2.blackbox == blackbox).values.map(_.size) //active local reservations
+      val remoteRes = remoteReservations.values.toList.flatten.filter(_.blackbox == blackbox).map(_.size) //remote/stale reservations
 
       //TODO: consider potential to fit each reservation, then required memory for this action.
       val allRes = localRes ++ remoteRes
       //make sure there is at least one node with unreserved mem > memory
-      val canLaunch = clusterHasPotentialMemoryCapacity(memory.toMB, allRes) //consider all reservations blocking till they are removed during NodeStatsUpdate
+      val canLaunch = AkkaClusterContainerResourceManager.clusterHasPotentialMemoryCapacity(
+        clusterActionHostStats,
+        memory.toMB,
+        allRes) //consider all reservations blocking till they are removed during NodeStatsUpdate
       //log only when changing value
       if (canLaunch != clusterResourcesAvailable) {
         if (canLaunch) {
-          logging.info(this, s"cluster can launch action with ${memory.toMB}MB reserved:${reservedSize}")
+          logging.info(
+            this,
+            s"cluster can launch action with ${memory.toMB}MB local reserved:${reservedSize} remote reserved:${remoteReservedSize}")
         } else {
-          logging.warn(this, s"cluster cannot launch action with ${memory.toMB}MB reserved:${reservedSize}")
+          logging.warn(
+            this,
+            s"cluster cannot launch action with ${memory.toMB}MB local reserved:${reservedSize} remote reserved:${remoteReservedSize}")
         }
       }
       clusterResourcesAvailable = canLaunch
@@ -145,29 +157,9 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
     }
   }
 
-  /** Return true to indicate there is expectation that there is "room" to launch a task with these memory/cpu/ports specs */
-  def clusterHasPotentialMemoryCapacity(memory: Double, reserve: Iterable[ByteSize]): Boolean = {
-    //copy AgentStats, then deduct pending tasks
-    var availableResources = clusterActionHostStats.toList.sortBy(_._2.mem).toMap //sort by mem to match lowest value
-    val inNeedReserved = ListBuffer.empty ++ reserve
-
-    var unmatched = 0
-
-    inNeedReserved.foreach { p =>
-      //for each pending find an available offer that fits
-      availableResources.find(_._2.mem > p.toMB) match {
-        case Some(o) =>
-          availableResources = availableResources + (o._1 -> o._2.copy(mem = o._2.mem - p.toMB))
-          inNeedReserved -= p
-        case None => unmatched += 1
-      }
-    }
-    unmatched == 0 && availableResources.exists(_._2.mem > memory)
-  }
-
   /** reservation adjustments */
-  override def addReservation(ref: ActorRef, size: ByteSize): Unit = {
-    localReservations = localReservations + (ref -> Reservation(size))
+  override def addReservation(ref: ActorRef, size: ByteSize, blackbox: Boolean): Unit = {
+    localReservations = localReservations + (ref -> Reservation(size, blackbox))
   }
   override def releaseReservation(ref: ActorRef): Unit = {
     localReservations = localReservations - ref
@@ -376,13 +368,58 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
     }
   }
 }
+object AkkaClusterContainerResourceManager {
+
+//  /** Return true to indicate there is expectation that there is "room" to launch a task with these memory/cpu/ports specs */
+//  def clusterHasPotentialMemoryCapacity(stats: Map[String, NodeStats],
+//                                        memory: Double,
+//                                        reserve: Iterable[ByteSize]): Boolean = {
+//    //copy AgentStats, then deduct pending tasks
+//    var availableResources = stats.toList.sortBy(_._2.mem).toMap //sort by mem to match lowest value
+//    val inNeedReserved = ListBuffer.empty ++ reserve
+//
+//    var unmatched = 0
+//
+//    inNeedReserved.foreach { p =>
+//      //for each pending find an available offer that fits
+//      availableResources.find(_._2.mem > p.toMB) match {
+//        case Some(o) =>
+//          availableResources = availableResources + (o._1 -> o._2.copy(mem = o._2.mem - p.toMB))
+//          inNeedReserved -= p
+//        case None => unmatched += 1
+//      }
+//    }
+//    unmatched == 0 && availableResources.exists(_._2.mem > memory)
+//  }
+  /** Return true to indicate there is expectation that there is "room" to launch a task with these memory/cpu/ports specs */
+  def clusterHasPotentialMemoryCapacity(stats: Map[String, NodeStats],
+                                        memory: Double,
+                                        reserve: Iterable[ByteSize]): Boolean = {
+    //copy AgentStats, then deduct pending tasks
+    var availableResources = stats.toList.sortBy(_._2.mem).toMap //sort by mem to match lowest value
+    val inNeedReserved = ListBuffer.empty ++ reserve
+
+    var unmatched = 0
+
+    inNeedReserved.foreach { p =>
+      //for each pending find an available offer that fits
+      availableResources.find(_._2.mem > p.toMB) match {
+        case Some(o) =>
+          availableResources = availableResources + (o._1 -> o._2.copy(mem = o._2.mem - p.toMB))
+          inNeedReserved -= p
+        case None => unmatched += 1
+      }
+    }
+    unmatched == 0 && availableResources.exists(_._2.mem > memory)
+  }
+}
 
 /**
  * Reservation indicates resources allocated to container, but possibly not launched yet. May be negative for container stop.
  * Pending: Allocated from this point of view, but not yet started/stopped by cluster manager.
  * Scheduled: Started/Stopped by cluster manager, but not yet reflected in NodeStats, so must still be considered when allocating resources.
  * */
-case class Reservation(size: ByteSize)
+case class Reservation(size: ByteSize, blackbox: Boolean)
 case class RemoteContainerRef(size: ByteSize, lastUsed: Instant, containerAddress: ContainerAddress)
 case class RequestReleaseFree(id: Int, remoteContainerRefs: List[RemoteContainerRef])
 case class ReleaseFree(remoteContainerRefs: List[RemoteContainerRef])

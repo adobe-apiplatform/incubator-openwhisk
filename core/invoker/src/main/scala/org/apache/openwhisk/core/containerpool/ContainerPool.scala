@@ -135,7 +135,11 @@ class ContainerPool(instanceId: InvokerInstanceId,
           .schedule(r.action, r.msg.user.namespace.name, freePool)
         val createdContainer =
           // Is there enough space on the invoker (or the cluster manager) for this action to be executed.
-          if (warmContainer.isDefined || hasPoolSpaceFor(poolConfig, busyPool, r.action.limits.memory.megabytes.MB)) {
+          if (warmContainer.isDefined || hasPoolSpaceFor(
+                poolConfig,
+                busyPool,
+                r.action.limits.memory.megabytes.MB,
+                r.action.exec.pull)) {
             // Schedule a job to a warm container
             warmContainer
               .map(container => (container, container._2.initingState)) //warmed, warming, and warmingCold always know their state
@@ -143,11 +147,15 @@ class ContainerPool(instanceId: InvokerInstanceId,
                 // There was no warm/warming/warmingCold container. Try to take a prewarm container or a cold container.
 
                 // Is there enough space to create a new container or do other containers have to be removed?
-                if (hasPoolSpaceFor(poolConfig, busyPool ++ freePool, r.action.limits.memory.megabytes.MB)) {
+                if (hasPoolSpaceFor(
+                      poolConfig,
+                      busyPool ++ freePool,
+                      r.action.limits.memory.megabytes.MB,
+                      r.action.exec.pull)) {
                   takePrewarmContainer(r.action)
                     .map(container => (container, "prewarmed"))
                     .orElse {
-                      Some(createContainer(r.action.limits.memory.megabytes.MB), "cold")
+                      Some(createContainer(r.action.limits.memory.megabytes.MB, r.action.exec.pull), "cold")
                     }
                 } else None)
               .orElse( // Remove a container and create a new one for the given job
@@ -168,7 +176,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
                   .map(_ =>
                     takePrewarmContainer(r.action)
                       .map(container => (container, "recreatedPrewarm"))
-                      .getOrElse(createContainer(r.action.limits.memory.megabytes.MB), "recreated"))
+                      .getOrElse(createContainer(r.action.limits.memory.megabytes.MB, r.action.exec.pull), "recreated"))
                   .orElse { //no removals, request space
                     resourceManager.requestSpace(r.action.limits.memory.megabytes.MB)
                     None
@@ -359,11 +367,11 @@ class ContainerPool(instanceId: InvokerInstanceId,
   }
 
   /** Creates a new container and updates state accordingly. */
-  def createContainer(memoryLimit: ByteSize): (ActorRef, ContainerData) = {
+  def createContainer(memoryLimit: ByteSize, blackbox: Boolean): (ActorRef, ContainerData) = {
     val ref = childFactory(context)
     val data = MemoryData(memoryLimit)
     //increase the reserved (not yet started container) memory tracker
-    resourceManager.addReservation(ref, memoryLimit)
+    resourceManager.addReservation(ref, memoryLimit, blackbox)
     freePool = freePool + (ref -> data)
     ref -> data
   }
@@ -375,7 +383,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
       val ref = childFactory(context)
       ref ! Start(exec, memoryLimit)
       //increase the reserved (not yet started container) memory tracker
-      resourceManager.addReservation(ref, memoryLimit)
+      resourceManager.addReservation(ref, memoryLimit, exec.pull)
     } else {
       logging.warn(this, "cannot create additional prewarm")
     }
@@ -428,8 +436,9 @@ class ContainerPool(instanceId: InvokerInstanceId,
   def hasPoolSpaceFor[A](poolConfig: ContainerPoolConfig,
                          pool: Map[A, ContainerData],
                          memory: ByteSize,
+                         blackbox: Boolean,
                          prewarm: Boolean = false)(implicit tid: TransactionId): Boolean = {
-    resourceManager.canLaunch(memory, memoryConsumptionOf(pool), poolConfig, prewarm)
+    resourceManager.canLaunch(memory, memoryConsumptionOf(pool), poolConfig, prewarm, blackbox)
   }
 
   def updateUnused() = {

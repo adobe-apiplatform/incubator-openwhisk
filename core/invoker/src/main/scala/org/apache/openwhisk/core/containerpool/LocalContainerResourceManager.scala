@@ -25,7 +25,8 @@ class LocalContainerResourceManager(pool: ActorRef)(implicit logging: Logging) e
   override def canLaunch(size: ByteSize,
                          poolMemory: Long,
                          poolConfig: ContainerPoolConfig,
-                         prewarm: Boolean): Boolean = {
+                         prewarm: Boolean,
+                         blackbox: Boolean): Boolean = {
     prewarm || poolMemory + size.toMB <= poolConfig.userMemory.toMB //in this impl we do not restrict starting of prewarm based on pool capacity
   }
 }
