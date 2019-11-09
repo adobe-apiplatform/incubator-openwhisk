@@ -69,18 +69,22 @@ object KubernetesContainer {
     val podName = if (origName.endsWith("-")) origName.reverse.dropWhile(_ == '-').reverse else origName
 
     for {
-      container <- kubernetes.run(podName, image, memory, environment, labels).recoverWith {
-        case _ =>
-          kubernetes
-            .rm(podName)
-            .andThen {
-              case Failure(e) =>
-                log.error(this, s"Failed delete pod for '$name': ${e.getClass} - ${e.getMessage}")
-            }
-            .transformWith { _ =>
-              Future.failed(WhiskContainerStartupError(s"Failed to run container with image '${image}'."))
-            }
-      }
+      container <- kubernetes
+        .run(podName, image, memory, environment, labels)
+        .recoverWith {
+          case c: ClusterResourceError =>
+            Future.failed(c)
+          case _ =>
+            kubernetes
+              .rm(podName)
+              .andThen {
+                case Failure(e) =>
+                  log.error(this, s"Failed delete pod for '$name': ${e.getClass} - ${e.getMessage}")
+              }
+              .transformWith { _ =>
+                Future.failed(WhiskContainerStartupError(s"Failed to run container with image '${image}'."))
+              }
+        }
     } yield container
   }
 

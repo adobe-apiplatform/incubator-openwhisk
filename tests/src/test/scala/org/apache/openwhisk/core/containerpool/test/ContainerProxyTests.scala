@@ -722,12 +722,14 @@ class ContainerProxyTests
 
     //complete the first run
     runPromises(0).success(runInterval, ActivationResponse.success())
-    expectWarmed(invocationNamespace.name, concurrentAction) //when first completes (count is 0 since stashed not counted)
-    expectMsg(Transition(machine, Running, Ready)) //wait for first to complete to skip the delay step that can only reliably be tested in single threaded
-    expectMsg(Transition(machine, Ready, Running)) //when second starts (after delay...)
+
+    //room for 1 more, so expect NeedWork msg
+    expectWarmed(invocationNamespace.name, concurrentAction) //when first completes
 
     //complete the second run
     runPromises(1).success(runInterval, ActivationResponse.success())
+
+    //room for 1 more, so expect NeedWork msg
     expectWarmed(invocationNamespace.name, concurrentAction) //when second completes
 
     //go back to ready after first and second runs are complete

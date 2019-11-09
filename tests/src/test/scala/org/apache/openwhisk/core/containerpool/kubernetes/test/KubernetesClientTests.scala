@@ -18,12 +18,10 @@
 package org.apache.openwhisk.core.containerpool.kubernetes.test
 
 import java.time.Instant
-
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.HttpResponse
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Concat, Sink, Source}
-
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
@@ -39,12 +37,13 @@ import common.{StreamLogging, WskActorSystem}
 import okio.Buffer
 import spray.json.{JsObject, JsValue}
 import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.containerpool.ClusterResourceError
+//import org.apache.openwhisk.core.containerpool.ClusterResourceError
 import org.apache.openwhisk.core.containerpool.{ContainerAddress, ContainerId}
 import org.apache.openwhisk.core.containerpool.kubernetes._
 import org.apache.openwhisk.core.entity.ByteSize
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.containerpool.Container.ACTIVATION_LOG_SENTINEL
-
 import scala.collection.mutable
 import scala.collection.immutable
 
@@ -55,7 +54,8 @@ class KubernetesClientTests
     with StreamLogging
     with BeforeAndAfterEach
     with Eventually
-    with WskActorSystem {
+    with WskActorSystem
+    with KubeClientSupport {
 
   import KubernetesClientTests._
 
@@ -129,6 +129,19 @@ class KubernetesClientTests
     await(container.resume())
     kubernetes.resumes should have size 1
     kubernetes.resumes(0) shouldBe id
+  }
+  it should "throw ClusterResourceError when pod creation fails" in {
+    val config = KubernetesClientConfig(
+      KubernetesClientTimeoutConfig(10.seconds, 10.seconds),
+      KubernetesInvokerAgentConfig(false, 0),
+      KubernetesInvokerNodeAffinity(false, "", ""),
+      false)
+    //use the mock server in KubeClientSupport:
+    val client = new KubernetesClient(config, Some(kubeClient))(actorSystem.dispatcher)
+    //without additional config the mock server will throw: io.fabric8.kubernetes.client.KubernetesClientException: Failure executing: POST at: http://localhost:55979/api/v1/namespaces/test/pods
+    //which must get wrapped as a ClusterResourceError
+    val container = client.run("name", "image")
+    a[ClusterResourceError] should be thrownBy await(container)
   }
 
   it should "return all logs when no sinceTime passed" in {

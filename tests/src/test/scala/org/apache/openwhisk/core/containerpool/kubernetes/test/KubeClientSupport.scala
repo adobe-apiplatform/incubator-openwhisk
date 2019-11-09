@@ -29,7 +29,7 @@ trait KubeClientSupport extends TestSuite with BeforeAndAfterAll with StreamLogg
 
   protected def useMockServer = true
 
-  protected lazy val (kubeClient, closeable) = {
+  protected lazy val (kubeClient: DefaultKubernetesClient, closeable) = {
     if (useMockServer) {
       val server = new KubernetesMockServer(false)
       server.init()
@@ -53,7 +53,7 @@ trait KubeClientSupport extends TestSuite with BeforeAndAfterAll with StreamLogg
     super.beforeAll()
   }
 
-  override protected def afterAll(): Unit = {
+  override def afterAll(): Unit = {
     super.afterAll()
     closeable.apply()
   }

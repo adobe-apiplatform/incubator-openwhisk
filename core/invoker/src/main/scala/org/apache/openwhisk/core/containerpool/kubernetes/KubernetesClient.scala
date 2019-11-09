@@ -21,7 +21,6 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.time.format.DateTimeFormatterBuilder
 import java.time.{Instant, ZoneId}
-
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.Uri
 import akka.http.scaladsl.model.Uri.{Path, Query}
@@ -36,6 +35,7 @@ import okhttp3.{Call, Callback, Request, Response}
 import okio.BufferedSource
 import org.apache.openwhisk.common.{ConfigMapValue, Logging, TransactionId}
 import org.apache.openwhisk.core.ConfigKeys
+import org.apache.openwhisk.core.containerpool.ClusterResourceError
 import org.apache.openwhisk.core.containerpool.docker.ProcessRunner
 import org.apache.openwhisk.core.containerpool.{ContainerAddress, ContainerId}
 import org.apache.openwhisk.core.entity.ByteSize
@@ -43,7 +43,6 @@ import org.apache.openwhisk.core.entity.size._
 import pureconfig.loadConfigOrThrow
 import spray.json.DefaultJsonProtocol._
 import spray.json._
-
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -88,13 +87,14 @@ case class KubernetesClientConfig(timeouts: KubernetesClientTimeoutConfig,
  * You only need one instance (and you shouldn't get more).
  */
 class KubernetesClient(
-  config: KubernetesClientConfig = loadConfigOrThrow[KubernetesClientConfig](ConfigKeys.kubernetes))(
-  executionContext: ExecutionContext)(implicit log: Logging, as: ActorSystem)
+  config: KubernetesClientConfig = loadConfigOrThrow[KubernetesClientConfig](ConfigKeys.kubernetes),
+  client: Option[DefaultKubernetesClient] = None)(executionContext: ExecutionContext)(implicit log: Logging,
+                                                                                      as: ActorSystem)
     extends KubernetesApi
     with ProcessRunner {
   implicit protected val ec = executionContext
   implicit protected val am = ActorMaterializer()
-  implicit protected val kubeRestClient = {
+  implicit protected val kubeRestClient = client.getOrElse {
     val configBuilder = new ConfigBuilder()
       .withConnectionTimeout(config.timeouts.logs.toMillis.toInt)
       .withRequestTimeout(config.timeouts.logs.toMillis.toInt)
@@ -115,10 +115,10 @@ class KubernetesClient(
       log.info(this, s"Pod spec being created\n${Serialization.asYaml(pod)}")
     }
     val namespace = kubeRestClient.getNamespace
-    kubeRestClient.pods.inNamespace(namespace).create(pod)
 
     Future {
       blocking {
+        kubeRestClient.pods.inNamespace(namespace).create(pod)
         val createdPod = kubeRestClient.pods
           .inNamespace(namespace)
           .withName(name)
@@ -126,9 +126,26 @@ class KubernetesClient(
         toContainer(createdPod)
       }
     }.recoverWith {
+      //Note we have seen cases where apiserver responds with 409 conflict while modifying resourcequota during pod creation:
+      //example 409 failure from kubectl cli:
+      //I1029 15:44:38.652082   91105 round_trippers.go:441] Response Status: 409 Conflict in 107 milliseconds
+      //I1029 15:44:38.652106   91105 round_trippers.go:444] Response Headers:
+      //I1029 15:44:38.652113   91105 round_trippers.go:447]     Audit-Id: 644e66a6-b477-4ced-ba26-08420ec51c11
+      //I1029 15:44:38.652120   91105 round_trippers.go:447]     Content-Type: application/json
+      //I1029 15:44:38.652125   91105 round_trippers.go:447]     Content-Length: 342
+      //I1029 15:44:38.652203   91105 round_trippers.go:447]     Date: Tue, 29 Oct 2019 22:44:38 GMT
+      //I1029 15:44:38.652232   91105 request.go:947] Response Body: {"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"Operation cannot be fulfilled on resourcequotas \"rq-team-runtime-poc\": the object has been modified; please apply your changes to the latest version and try again","reason":"Conflict","details":{"name":"rq-team-runtime-poc","kind":"resourcequotas"},"code":409}
+
       case e =>
-        log.error(this, s"Failed create pod for '$name': ${e.getClass} - ${e.getMessage}")
-        Future.failed(new Exception(s"Failed to create pod '$name'"))
+        //add some dedicated logging for the case where 409 resourcequota conflict is returned
+        if (e.getMessage.contains("Operation cannot be fulfilled on resourcequotas") &&
+            e.getMessage.contains("the object has been modified")) {
+          log.warn(this, s"Resourcequota modification failure '$name': ${e.getClass} - ${e.getMessage}")
+        } else {
+          log.error(this, s"Failed create pod for '$name': ${e.getClass} - ${e.getMessage}")
+        }
+        //TODO: disambiguate between resource failure and unretryable failures.
+        Future.failed(ClusterResourceError(memory))
     }
   }
 

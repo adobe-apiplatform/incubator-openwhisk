@@ -184,6 +184,33 @@ class KubernetesContainerTests
     kubernetes.runs should have size 0
     kubernetes.rms should have size 1
   }
+  it should "generate a ClusterResourceError in case of kubernetes pod creation failure" in {
+    implicit val kubernetes = new TestKubernetesClient {
+      override def run(
+        name: String,
+        image: String,
+        memory: ByteSize = 256.MB,
+        env: Map[String, String] = Map.empty,
+        labels: Map[String, String] = Map.empty)(implicit transid: TransactionId): Future[KubernetesContainer] = {
+        //TODO: update to various exceptions when there is a way to determine un-retryable error or not
+        Future.failed(ClusterResourceError(memory))
+      }
+    }
+
+    val image = "image"
+    val userProvidedImage = false
+    val environment = Map("test" -> "hi")
+    val labels = Map("invoker" -> "0")
+    val name = "my_Container(1)"
+    val container = KubernetesContainer.create(
+      transid = transid,
+      image = image,
+      userProvidedImage = userProvidedImage,
+      environment = environment,
+      labels = labels,
+      name = name)
+    a[ClusterResourceError] should be thrownBy await(container)
+  }
 
   /*
    * KUBERNETES COMMANDS

@@ -18,13 +18,11 @@
 package org.apache.openwhisk.core.containerpool
 
 import java.time.Instant
-
 import akka.actor.Status.{Failure => FailureMessage}
 import akka.actor.{FSM, Props, Stash}
 import akka.event.Logging.InfoLevel
 import akka.pattern.pipe
 import pureconfig.loadConfigOrThrow
-
 import scala.collection.immutable
 import spray.json.DefaultJsonProtocol._
 import spray.json._
@@ -43,7 +41,6 @@ import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.invoker.InvokerReactive.{ActiveAck, LogsCollector}
 import org.apache.openwhisk.http.Messages
-
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.{Failure, Success}
@@ -244,6 +241,9 @@ class ContainerProxy(factory: (TransactionId,
 
   //keep a separate count to avoid confusion with ContainerState.activeActivationCount that is tracked/modified only in ContainerPool
   var activeCount = 0;
+  //track the first run for easily referring to the action being initialized (it may fail)
+  var firstRun: Option[Run] = None
+
   startWith(Uninitialized, NoData())
 
   when(Uninitialized) {
@@ -265,6 +265,7 @@ class ContainerProxy(factory: (TransactionId,
     // cold start (no container to reuse or available stem cell container)
     case Event(job: Run, _) =>
       implicit val transid = job.msg.transid
+      firstRun = Some(job)
       activeCount += 1
       // create a new container
       val container = factory(
@@ -286,6 +287,8 @@ class ContainerProxy(factory: (TransactionId,
             // normalizes the life cycle for containers and their cleanup when activations fail
             self ! PreWarmCompleted(
               PreWarmedData(container, job.action.exec.kind, job.action.limits.memory.megabytes.MB, 1))
+          case Failure(_: ClusterResourceError) =>
+          // no side affects: the container did not come up due to resource errors; we will notify parent (which should retry)
 
           case Failure(t) =>
             // the container did not come up cleanly, so disambiguate the failure mode and then cleanup
@@ -326,6 +329,11 @@ class ContainerProxy(factory: (TransactionId,
       context.parent ! NeedWork(completed.data)
       goto(Started) using completed.data
 
+    case Event(FailureMessage(e: ClusterResourceError), _) =>
+      logging.info(this, s"resources (${e.required}) unavailable")
+      context.parent ! ContainerRemoved
+      stop()
+
     // container creation failed
     case Event(_: FailureMessage, _) =>
       context.parent ! ContainerRemoved
@@ -337,6 +345,7 @@ class ContainerProxy(factory: (TransactionId,
   when(Started) {
     case Event(job: Run, data: PreWarmedData) =>
       implicit val transid = job.msg.transid
+      firstRun = Some(job)
       activeCount += 1
       initializeAndRun(data.container, job)
         .map(_ => RunCompleted)
@@ -351,12 +360,22 @@ class ContainerProxy(factory: (TransactionId,
     // and we keep it in case we need to destroy it.
     case Event(completed: PreWarmCompleted, _) => stay using completed.data
 
+    // Run during init (for concurrent > 1)
+    case Event(job: Run, data: PreWarmedData) =>
+      implicit val transid = job.msg.transid
+      logging.info(this, s"buffering for warming container ${data.container}; ${activeCount} activations in flight")
+      runBuffer = runBuffer.enqueue(job)
+      stay()
+
     // Init was successful
     case Event(completed: InitCompleted, _: PreWarmedData) =>
+      processBuffer(completed.data.action)
       stay using completed.data
 
     // Init was successful
     case Event(data: WarmedData, _: PreWarmedData) =>
+      //reset firstRun to be empty, no need to remember it now
+      firstRun = None
       //in case concurrency supported, multiple runs can begin as soon as init is complete
       context.parent ! NeedWork(data)
       stay using data
@@ -373,7 +392,8 @@ class ContainerProxy(factory: (TransactionId,
       }
     case Event(job: Run, data: WarmedData)
         if activeCount >= data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if we are over concurrency limit, and not a failure on resume
-      logging.warn(this, s"buffering for container ${data.container}; ${activeCount} activations in flight")
+      implicit val transid = job.msg.transid
+      logging.warn(this, s"buffering for maxed warm container ${data.container}; ${activeCount} activations in flight")
       runBuffer = runBuffer.enqueue(job)
       stay()
     case Event(job: Run, data: WarmedData)
@@ -385,6 +405,14 @@ class ContainerProxy(factory: (TransactionId,
         .map(_ => RunCompleted)
         .pipeTo(self)
       stay() using data
+
+    // Failed at getting a container due to resource shortage during cold-start run
+    case Event(FailureMessage(e: ClusterResourceError), _: PreWarmedData) =>
+      logging.info(this, s"resources (${e.required}) unavailable, will retry run later")
+      context.parent ! ContainerRemoved
+      firstRun.foreach(r => context.parent ! r)
+      rejectBuffered()
+      stop()
 
     // Failed after /init (the first run failed)
     case Event(_: FailureMessage, data: PreWarmedData) =>
@@ -481,17 +509,28 @@ class ContainerProxy(factory: (TransactionId,
   def requestWork(newData: WarmedData): Boolean = {
     //if there is concurrency capacity, process runbuffer, or signal NeedWork
     if (activeCount < newData.action.limits.concurrency.maxConcurrent) {
-      runBuffer.dequeueOption match {
-        case Some((run, q)) =>
-          runBuffer = q
-          self ! run
-          true
-        case _ =>
-          context.parent ! NeedWork(newData)
-          false
+      if (runBuffer.length > 0) {
+        processBuffer(newData.action)
+        true
+      } else {
+        context.parent ! NeedWork(newData)
+        false
       }
     } else {
       false
+    }
+  }
+
+  /** If jobs have been buffered while starting, send as many as possible now */
+  def processBuffer(action: ExecutableWhiskAction) = {
+    //send as many buffered as possible
+    var available = action.limits.concurrency.maxConcurrent - activeCount
+    logging.info(this, s"resending up to ${available} from ${runBuffer.length} buffered jobs")
+    while (available > 0 && runBuffer.length > 0) {
+      val (run, q) = runBuffer.dequeue
+      self ! run
+      runBuffer = q
+      available -= 1
     }
   }
 
