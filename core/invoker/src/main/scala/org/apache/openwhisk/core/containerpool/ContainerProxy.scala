@@ -18,11 +18,13 @@
 package org.apache.openwhisk.core.containerpool
 
 import java.time.Instant
+
 import akka.actor.Status.{Failure => FailureMessage}
 import akka.actor.{FSM, Props, Stash}
 import akka.event.Logging.InfoLevel
 import akka.pattern.pipe
 import pureconfig.loadConfigOrThrow
+
 import scala.collection.immutable
 import spray.json.DefaultJsonProtocol._
 import spray.json._
@@ -41,6 +43,7 @@ import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.invoker.InvokerReactive.{ActiveAck, LogsCollector}
 import org.apache.openwhisk.http.Messages
+
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.{Failure, Success}
@@ -360,16 +363,8 @@ class ContainerProxy(factory: (TransactionId,
     // and we keep it in case we need to destroy it.
     case Event(completed: PreWarmCompleted, _) => stay using completed.data
 
-    // Run during init (for concurrent > 1)
-    case Event(job: Run, data: PreWarmedData) =>
-      implicit val transid = job.msg.transid
-      logging.info(this, s"buffering for warming container ${data.container}; ${activeCount} activations in flight")
-      runBuffer = runBuffer.enqueue(job)
-      stay()
-
     // Init was successful
     case Event(completed: InitCompleted, _: PreWarmedData) =>
-      processBuffer(completed.data.action)
       stay using completed.data
 
     // Init was successful
@@ -392,8 +387,7 @@ class ContainerProxy(factory: (TransactionId,
       }
     case Event(job: Run, data: WarmedData)
         if activeCount >= data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if we are over concurrency limit, and not a failure on resume
-      implicit val transid = job.msg.transid
-      logging.warn(this, s"buffering for maxed warm container ${data.container}; ${activeCount} activations in flight")
+      logging.warn(this, s"buffering for container ${data.container}; ${activeCount} activations in flight")
       runBuffer = runBuffer.enqueue(job)
       stay()
     case Event(job: Run, data: WarmedData)
@@ -509,28 +503,17 @@ class ContainerProxy(factory: (TransactionId,
   def requestWork(newData: WarmedData): Boolean = {
     //if there is concurrency capacity, process runbuffer, or signal NeedWork
     if (activeCount < newData.action.limits.concurrency.maxConcurrent) {
-      if (runBuffer.length > 0) {
-        processBuffer(newData.action)
-        true
-      } else {
-        context.parent ! NeedWork(newData)
-        false
+      runBuffer.dequeueOption match {
+        case Some((run, q)) =>
+          runBuffer = q
+          self ! run
+          true
+        case _ =>
+          context.parent ! NeedWork(newData)
+          false
       }
     } else {
       false
-    }
-  }
-
-  /** If jobs have been buffered while starting, send as many as possible now */
-  def processBuffer(action: ExecutableWhiskAction) = {
-    //send as many buffered as possible
-    var available = action.limits.concurrency.maxConcurrent - activeCount
-    logging.info(this, s"resending up to ${available} from ${runBuffer.length} buffered jobs")
-    while (available > 0 && runBuffer.length > 0) {
-      val (run, q) = runBuffer.dequeue
-      self ! run
-      runBuffer = q
-      available -= 1
     }
   }
 
