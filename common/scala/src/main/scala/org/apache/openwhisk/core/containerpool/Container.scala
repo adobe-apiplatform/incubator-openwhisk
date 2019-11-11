@@ -86,6 +86,7 @@ trait Container {
 
   /** Stops the container from consuming CPU cycles. NOT thread-safe - caller must synchronize. */
   def suspend()(implicit transid: TransactionId): Future[Unit] = {
+    logging.info(this, s"suspending connection to ${this.toString()}")
     //close connection first, then close connection pool
     //(testing pool recreation vs connection closing, time was similar - so using the simpler recreation approach)
     val toClose = httpConnection
@@ -95,7 +96,12 @@ trait Container {
 
   /** Dual of halt. NOT thread-safe - caller must synchronize.*/
   def resume()(implicit transid: TransactionId): Future[Unit] = {
-    httpConnection = Some(openConnections(containerHttpTimeout, containerHttpMaxConcurrent))
+    logging.info(this, s"resuming connection to ${this.toString()}")
+    if (httpConnection.isDefined) {
+      logging.warn(this, s"resuming multiple times, will not recreate connection tp ${this.toString()}")
+    } else {
+      httpConnection = Some(openConnections(containerHttpTimeout, containerHttpMaxConcurrent))
+    }
     Future.successful({})
   }
 
