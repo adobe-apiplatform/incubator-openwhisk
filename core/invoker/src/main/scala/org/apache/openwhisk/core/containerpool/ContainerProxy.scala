@@ -333,7 +333,7 @@ class ContainerProxy(factory: (TransactionId,
       goto(Started) using completed.data
 
     case Event(FailureMessage(e: ClusterResourceError), _) =>
-      logging.info(this, s"resources (${e.required}) unavailable")
+      logging.info(this, s"resources (${e.required}) unavailable during prewarm")
       context.parent ! ContainerRemoved
       stop()
 
@@ -400,11 +400,14 @@ class ContainerProxy(factory: (TransactionId,
         .pipeTo(self)
       stay() using data
 
-    // Failed at getting a container due to resource shortage during cold-start run
-    case Event(FailureMessage(e: ClusterResourceError), _: PreWarmedData) =>
-      logging.info(this, s"resources (${e.required}) unavailable, will retry run later")
+    // Failed at getting a container due to resource shortage during cold-start run - must retry on either NoData or PreWarmedData
+    case Event(FailureMessage(e: ClusterResourceError), _) =>
       context.parent ! ContainerRemoved
-      firstRun.foreach(r => context.parent ! r)
+      firstRun.foreach { r =>
+        implicit val tid = r.msg.transid
+        logging.info(this, s"resources (${e.required}) unavailable during cold start, will retry run later")
+        context.parent ! r
+      }
       rejectBuffered()
       stop()
 
