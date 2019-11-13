@@ -406,7 +406,8 @@ class ContainerProxy(factory: (TransactionId,
       firstRun.foreach { r =>
         implicit val tid = r.msg.transid
         logging.info(this, s"resources (${e.required}) unavailable during cold start, will retry run later")
-        context.parent ! r
+        //schedule some delay before resend - resource error will be cleared either by a) cluster scaling or b) other activations completing
+        context.system.scheduler.scheduleOnce(500.milliseconds, context.parent, r)
       }
       rejectBuffered()
       stop()
