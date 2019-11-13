@@ -345,8 +345,6 @@ class ContainerPool(instanceId: InvokerInstanceId,
       logging.info(this, s"pool is trying to release ${refs.size} containers by request of invoker")
       //remove each ref, IFF it is still not in use, and has not been used for the idle grade period
       ContainerPool.findIdlesToRemove(poolConfig.clusterManagedIdleGrace, freePool, refs).foreach(removeContainer)
-    case EmitMetrics =>
-      emitMetrics()
   }
 
   /** Buffer processing in cluster managed resources means to send the first item in runBuffer;
