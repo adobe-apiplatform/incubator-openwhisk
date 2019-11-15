@@ -17,6 +17,7 @@
 
 package org.apache.openwhisk.core.invoker
 
+import akka.actor.ActorRef
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 
@@ -140,7 +141,7 @@ class InvokerReactive(
   containerFactory.init()
 
   CoordinatedShutdown(actorSystem)
-    .addTask(CoordinatedShutdown.PhaseBeforeActorSystemTerminate, "cleanup runtime containers") { () =>
+    .addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "cleanup runtime containers") { () =>
       containerFactory.cleanup()
       Future.successful(Done)
     }
