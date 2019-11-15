@@ -47,6 +47,8 @@ import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.LoggingMarkers
 import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.containerpool.ClusterResourceError
+import org.apache.openwhisk.core.containerpool.ClusterResourceError
 import org.apache.openwhisk.core.containerpool.Container
 import org.apache.openwhisk.core.containerpool.ContainerAddress
 import org.apache.openwhisk.core.containerpool.ContainerId
@@ -128,11 +130,8 @@ object MesosTask {
 
     launched
       .recoverWith {
-        case c: CapacityFailure =>
-          Future.failed(
-            ClusterResourceError(
-              memory,
-              if (c.remainingResources.nonEmpty) c.remainingResources.maxBy(_._1)._1.toLong.MB else 0.MB))
+        case _: CapacityFailure =>
+          Future.failed(ClusterResourceError(memory))
       }
       .andThen {
         case Success(taskDetails) =>
