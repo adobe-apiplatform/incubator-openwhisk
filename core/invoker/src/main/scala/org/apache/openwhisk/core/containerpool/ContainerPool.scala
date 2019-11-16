@@ -19,11 +19,6 @@ package org.apache.openwhisk.core.containerpool
 
 import akka.actor.{Actor, ActorRef, ActorRefFactory, Props}
 import java.time.Instant
-import kamon.metric.MeasurementUnit
-import org.apache.openwhisk.common.LogMarkerToken
-import org.apache.openwhisk.common.Logging
-import org.apache.openwhisk.common.LoggingMarkers.clusterResourceManager
-import org.apache.openwhisk.common.LoggingMarkers.counter
 import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.{AkkaLogging, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.connector.MessageFeed
