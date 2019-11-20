@@ -437,7 +437,7 @@ class MesosContainerFactoryTest
     probe.reply(Failure(CapacityFailure(actionMemory.toMB, 1.0f, 1, List.empty)))
 
     ScalaFutures.whenReady(c.failed) { cr =>
-      cr shouldBe ClusterResourceError(actionMemory, 0.MB)
+      cr shouldBe ClusterResourceError(actionMemory)
     }
   }
 

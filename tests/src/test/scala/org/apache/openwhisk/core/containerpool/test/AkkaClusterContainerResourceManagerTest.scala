@@ -133,9 +133,9 @@ class AkkaClusterContainerResourceManagerTest
     //publish to local subscribers (ContainerPool)
     awaitAssert {
       resMgr.remoteReservedSize shouldBe 4096
-      resMgr.canLaunch(256.MB, 0, poolConfig, false, false) shouldBe true
-      resMgr.canLaunch(256.MB, 0, poolConfig, false, true) shouldBe false
+      resMgr.canLaunch(256.MB, 0, poolConfig, false) shouldBe true
+      resMgr.canLaunch(256.MB, 0, poolConfig, true) shouldBe false
     }
-//    resMgr.canLaunch(256.MB, 0, poolConfig, false, false) shouldBe true
+    //    resMgr.canLaunch(256.MB, 0, poolConfig, false, false) shouldBe true
   }
 }

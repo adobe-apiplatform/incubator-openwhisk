@@ -89,19 +89,6 @@ class ContainerPool(instanceId: InvokerInstanceId,
   //periodically emit metrics (don't need to do this for each message!)
   context.system.scheduler.schedule(30.seconds, 10.seconds, self, EmitMetrics)
 
-  var prewarmsInitialized = false
-
-  def initPrewarms() = { //invoked via InitPrewarms message
-    prewarmConfig.foreach { config =>
-      logging.info(this, s"pre-warming ${config.count} ${config.exec.kind} ${config.memoryLimit.toString}")(
-        TransactionId.invokerWarmup)
-      (1 to config.count).foreach { _ =>
-        prewarmContainer(config.exec, config.memoryLimit)
-      }
-    }
-  }
-
-  def inUse = freePool.filter(_._2.activeActivationCount > 0) ++ busyPool
   def logContainerStart(r: Run, containerState: String, activeActivations: Int, container: Option[Container]): Unit = {
     val namespaceName = r.msg.user.namespace.name
     val actionName = r.action.name.name
@@ -203,7 +190,8 @@ class ContainerPool(instanceId: InvokerInstanceId,
               // from the buffer
               val (_, newBuffer) = runBuffer.dequeue
               runBuffer = newBuffer
-              runBuffer.dequeueOption.foreach { case (run, _) => self ! run }
+              // Try to process the next item in buffer (or get another message from feed, if buffer is now empty)
+              processBufferOrFeed()
             }
             actor ! r // forwards the run request to the container
             logContainerStart(r, containerState, newData.activeActivationCount, container)
@@ -229,10 +217,9 @@ class ContainerPool(instanceId: InvokerInstanceId,
             }
             if (!isResentFromBuffer) {
               // Add this request to the buffer, as it is not there yet.
-              runBuffer = runBuffer.enqueue(r)
+              runBuffer = runBuffer.enqueue(Run(r.action, r.msg, retryLogDeadline))
             }
-            // As this request is the first one in the buffer, try again to execute it.
-            self ! Run(r.action, r.msg, retryLogDeadline)
+          //buffered items will be processed via processBufferOrFeed()
         }
       } else {
         // There are currently actions waiting to be executed before this action gets executed.
@@ -242,7 +229,6 @@ class ContainerPool(instanceId: InvokerInstanceId,
 
     // Container is free to take more work
     case NeedWork(warmData: WarmedData) =>
-      feed ! MessageFeed.Processed
       val oldData = freePool.get(sender()).getOrElse(busyPool(sender()))
       val newData =
         warmData.copy(lastUsed = oldData.lastUsed, activeActivationCount = oldData.activeActivationCount - 1)
@@ -264,7 +250,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
         busyPool = busyPool + (sender() -> newData)
         freePool = freePool - sender()
       }
-
+      processBufferOrFeed()
     // Container is prewarmed and ready to take work
     case NeedWork(data: PreWarmedData) =>
       //stop tracking via reserved
@@ -280,16 +266,22 @@ class ContainerPool(instanceId: InvokerInstanceId,
       // so there is capacity to accept another job request
       freePool.get(sender()).foreach { f =>
         freePool = freePool - sender()
-        if (f.activeActivationCount > 0) {
-          feed ! MessageFeed.Processed
-        }
       }
       // container was busy (busy indicates at full capacity), so there is capacity to accept another job request
       busyPool.get(sender()).foreach { _ =>
         busyPool = busyPool - sender()
-        feed ! MessageFeed.Processed
       }
 
+      //in case this was a prewarm
+      prewarmedPool.get(sender()).foreach { _ =>
+        logging.info(this, "failed prewarm removed")
+        prewarmedPool = prewarmedPool - sender()
+      }
+
+      //backfill prewarms on every ContainerRemoved, just in case
+      backfillPrewarms(false) //in case a prewarm is removed due to health failure or crash
+
+      processBufferOrFeed()
     // This message is received for one of these reasons:
     // 1. Container errored while resuming a warm container, could not process the job, and sent the job back
     // 2. The container aged, is destroying itself, and was assigned a job which it had to send back
@@ -303,7 +295,39 @@ class ContainerPool(instanceId: InvokerInstanceId,
     case EmitMetrics =>
       emitMetrics()
     case InitPrewarms =>
-      initPrewarms()
+      backfillPrewarms(true)
+  }
+
+  /** Resend next item in the buffer, or trigger next item in the feed, if no items in the buffer. */
+  def processBufferOrFeed() = {
+    // If buffer has more items, send next one, otherwise get next from feed.
+    runBuffer.dequeueOption match {
+      case Some((run, _)) => //run the first from buffer
+        self ! run
+      case None => //feed me!
+        feed ! MessageFeed.Processed
+    }
+  }
+
+  /** Install prewarm containers up to the configured requirements for each kind/memory combination. */
+  def backfillPrewarms(init: Boolean) = {
+    prewarmConfig.foreach { config =>
+      val kind = config.exec.kind
+      val memory = config.memoryLimit
+      val currentCount = prewarmedPool.count {
+        case (_, PreWarmedData(_, `kind`, `memory`, _)) => true
+        case _                                          => false
+      }
+      if (currentCount < config.count) {
+        logging.info(
+          this,
+          s"found ${currentCount} ${if (init) "initing" else "backfilling"} pre-warms to count: ${config.count} for kind:${config.exec.kind} mem:${config.memoryLimit.toString}")(
+          TransactionId.invokerWarmup)
+        (currentCount until config.count).foreach { i =>
+          prewarmContainer(config.exec, config.memoryLimit)
+        }
+      }
+    }
   }
 
   /** Creates a new container and updates state accordingly. */
@@ -504,8 +528,9 @@ object ContainerPool {
             factory: ActorRefFactory => ActorRef,
             poolConfig: ContainerPoolConfig,
             feed: ActorRef,
-            prewarmConfig: List[PrewarmingConfig] = List.empty) =
-    Props(new ContainerPool(instanceId, factory, feed, prewarmConfig, poolConfig))
+            prewarmConfig: List[PrewarmingConfig] = List.empty,
+            resMgr: Option[ContainerResourceManager] = None) =
+    Props(new ContainerPool(instanceId, factory, feed, prewarmConfig, poolConfig, resMgr))
 }
 
 /** Contains settings needed to perform container prewarming. */
