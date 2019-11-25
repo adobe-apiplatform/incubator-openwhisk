@@ -23,7 +23,6 @@ import org.apache.openwhisk.core.WhiskConfig
 import org.apache.openwhisk.core.entity.{ByteSize, ExecManifest, ExecutableWhiskAction, InvokerInstanceId}
 import org.apache.openwhisk.spi.Spi
 import scala.concurrent.Future
-import scala.concurrent.duration.FiniteDuration
 import scala.math.max
 
 case class ContainerArgsConfig(network: String,
@@ -43,13 +42,7 @@ case class ContainerArgsConfig(network: String,
     }.toMap
 }
 
-case class ContainerPoolConfig(userMemory: ByteSize,
-                               concurrentPeekFactor: Double,
-                               akkaClient: Boolean,
-                               clusterManagedResources: Boolean,
-                               useClusterBootstrap: Boolean,
-                               clusterManagedResourceMaxStarts: Int,
-                               clusterManagedIdleGrace: FiniteDuration) {
+case class ContainerPoolConfig(userMemory: ByteSize, concurrentPeekFactor: Double, akkaClient: Boolean) {
   require(
     concurrentPeekFactor > 0 && concurrentPeekFactor <= 1.0,
     s"concurrentPeekFactor must be > 0 and <= 1.0; was $concurrentPeekFactor")

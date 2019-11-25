@@ -271,9 +271,9 @@ class ContainerProxyTests
     (transid: TransactionId, activation: WhiskActivation, context: UserContext) =>
       Future.successful(())
   }
-  def healthchecksConfig(enabled: Boolean = false) = ContainerProxyHealthCheckConfig(enabled, 100.milliseconds, 2)
   val poolConfig =
-    ContainerPoolConfig(2.MB, 0.5, false, false, false, 10, 10.seconds)
+    ContainerPoolConfig(2.MB, 0.5, false)
+//  val resMgrConfig = ContainerResourceManagerConfig(false, false, 10, 10.seconds)
   val filterEnvVar = (k: String) => Character.isUpperCase(k.charAt(0))
 
   behavior of "ContainerProxy"
@@ -310,7 +310,6 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, Some("myname"), userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     preWarm(machine)
@@ -340,7 +339,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
 
@@ -385,7 +383,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     preWarm(machine)
@@ -449,7 +446,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     preWarm(machine)
@@ -500,7 +496,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     run(machine, Uninitialized)
@@ -541,7 +536,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
 
@@ -671,7 +665,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     (factory, container, acker, store, collector, machine)
@@ -715,7 +708,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
     registerCallback(machine)
@@ -811,12 +803,8 @@ class ContainerProxyTests
   it should "complete the transaction and reuse the container on a failed run IFF failure was applicationError" in within(
     timeout) {
     val container = new TestContainer {
-      override def run(
-        parameters: JsObject,
-        environment: JsObject,
-        timeout: FiniteDuration,
-        concurrent: Int,
-        reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
+      override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
+        implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         atomicRunCount.incrementAndGet()
         //every other run fails
         if (runCount % 2 == 0) {
@@ -841,7 +829,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = timeout))
     registerCallback(machine)
     preWarm(machine)
@@ -915,7 +902,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     machine ! Run(action, message)
@@ -960,7 +946,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     machine ! Run(action, message)
@@ -989,12 +974,8 @@ class ContainerProxyTests
   it should "complete the transaction and destroy the container on a failed run IFF failure was containerError" in within(
     timeout) {
     val container = new TestContainer {
-      override def run(
-        parameters: JsObject,
-        environment: JsObject,
-        timeout: FiniteDuration,
-        concurrent: Int,
-        reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
+      override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
+        implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
         atomicRunCount.incrementAndGet()
         Future.successful((initInterval, ActivationResponse.developerError(("boom"))))
       }
@@ -1014,7 +995,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     machine ! Run(action, message)
@@ -1054,7 +1034,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     machine ! Run(action, message)
@@ -1093,7 +1072,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     machine ! Run(action, message)
@@ -1136,7 +1114,6 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     run(machine, Uninitialized) // first run an activation
@@ -1159,95 +1136,6 @@ class ContainerProxyTests
     }
   }
 
-  it should "resend the job to the parent if /run fails connection after resume" in within(timeout) {
-    val container = new TestContainer {
-      override def run(
-        parameters: JsObject,
-        environment: JsObject,
-        timeout: FiniteDuration,
-        concurrent: Int,
-        reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
-
-        println(s"/run reschedule ${reschedule}")
-        if (reschedule) {
-          throw ContainerHealthError("reconnect failed to xyz")
-        }
-        super.run(parameters, environment, timeout, concurrent, reschedule)
-      }
-    }
-    val factory = createFactory(Future.successful(container))
-    val acker = createAcker()
-    val store = createStore
-
-    val machine =
-      childActorOf(
-        ContainerProxy
-          .props(
-            factory,
-            acker,
-            store,
-            createCollector(),
-            InvokerInstanceId(0, userMemory = defaultUserMemory),
-            poolConfig,
-            healthchecksConfig(),
-            pauseGrace = pauseGrace))
-    registerCallback(machine)
-    run(machine, Uninitialized) // first run an activation
-    timeout(machine) // times out Ready state so container suspends
-    expectPause(machine)
-
-    val runMessage = Run(action, message)
-    machine ! runMessage
-    expectMsg(Transition(machine, Paused, Running))
-    expectMsg(RescheduleJob)
-    expectMsg(Transition(machine, Running, Removing))
-    expectMsg(runMessage)
-
-    awaitAssert {
-      factory.calls should have size 1
-      container.runCount shouldBe 1
-      container.suspendCount shouldBe 1
-      container.resumeCount shouldBe 1
-      container.destroyCount shouldBe 1
-    }
-  }
-
-  it should "remove and replace a prewarm container if it fails healthcheck after startup" in within(timeout) {
-    val container = new TestContainer
-    val factory = createFactory(Future.successful(container))
-    val acker = createAcker()
-    val store = createStore
-    val collector = createCollector()
-
-    val machine =
-      childActorOf(
-        ContainerProxy
-          .props(
-            factory,
-            acker,
-            store,
-            collector,
-            InvokerInstanceId(0, userMemory = defaultUserMemory),
-            poolConfig,
-            healthchecksConfig(true),
-            pauseGrace = pauseGrace))
-    registerCallback(machine)
-    preWarm(machine)
-
-    //expect failure after healthchecks fail
-    expectMsg(ContainerRemoved)
-    expectMsg(Transition(machine, Started, Removing))
-
-    awaitAssert {
-      factory.calls should have size 1
-      container.initializeCount shouldBe 0
-      container.runCount shouldBe 0
-      collector.calls should have size 0
-      container.suspendCount shouldBe 0
-      container.resumeCount shouldBe 0
-      acker.calls should have size 0
-    }
-  }
   it should "remove the container if suspend fails" in within(timeout) {
     val container = new TestContainer {
       override def suspend()(implicit transid: TransactionId) = {
@@ -1269,7 +1157,6 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     run(machine, Uninitialized)
@@ -1315,7 +1202,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
 
@@ -1375,7 +1261,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     run(machine, Uninitialized)
@@ -1424,7 +1309,6 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
-            healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
 
@@ -1554,12 +1438,8 @@ class ContainerProxyTests
 
       initPromise.map(_.future).getOrElse(Future.successful(initInterval))
     }
-    override def run(
-      parameters: JsObject,
-      environment: JsObject,
-      timeout: FiniteDuration,
-      concurrent: Int,
-      reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
+    override def run(parameters: JsObject, environment: JsObject, timeout: FiniteDuration, concurrent: Int)(
+      implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
 
       // the "init" arguments are not passed on run
       parameters shouldBe JsObject(activationArguments.fields.filter(k => !filterEnvVar(k._1)))

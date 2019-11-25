@@ -18,6 +18,12 @@
 package org.apache.openwhisk.core.containerpool
 import akka.actor.ActorRef
 import org.apache.openwhisk.core.entity.ByteSize
+import scala.concurrent.duration.FiniteDuration
+
+case class ContainerResourceManagerConfig(clusterManagedResources: Boolean,
+                                          useClusterBootstrap: Boolean,
+                                          clusterManagedIdleGrace: FiniteDuration,
+                                          clusterManagedResourceMaxStarts: Int)
 
 trait ContainerResourceManager {
   def activationStartLogMessage(): String = ""
@@ -25,5 +31,5 @@ trait ContainerResourceManager {
 
   def addReservation(ref: ActorRef, byteSize: ByteSize, blackbox: Boolean): Unit = {}
   def releaseReservation(ref: ActorRef): Unit = {}
-  def canLaunch(size: ByteSize, poolMemory: Long, poolConfig: ContainerPoolConfig, blackbox: Boolean): Boolean
+  def canLaunch(size: ByteSize, poolMemory: Long, blackbox: Boolean): Boolean
 }

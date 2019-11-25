@@ -52,10 +52,11 @@ import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.Try
 
-class AkkaClusterContainerResourceManager(system: ActorSystem,
-                                          instanceId: InvokerInstanceId,
-                                          poolActor: ActorRef,
-                                          poolConfig: ContainerPoolConfig)(implicit logging: Logging)
+class AkkaClusterContainerResourceManager(
+  system: ActorSystem,
+  instanceId: InvokerInstanceId,
+  poolActor: ActorRef,
+  resourceManagerConfig: ContainerResourceManagerConfig)(implicit logging: Logging)
     extends ContainerResourceManager {
 
   /** cluster state tracking */
@@ -81,7 +82,7 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
   var idMap: immutable.Set[Int] = Set.empty
 
   override def activationStartLogMessage(): String =
-    s"node stats ${clusterActionHostStats} reserved ${localReservations.size} (of max ${poolConfig.clusterManagedResourceMaxStarts}) containers ${reservedSize}MB"
+    s"node stats ${clusterActionHostStats} reserved ${localReservations.size} (of max ${resourceManagerConfig.clusterManagedResourceMaxStarts}) containers ${reservedSize}MB"
 
   override def rescheduleLogMessage() = {
     s"reservations: ${localReservations.size}"
@@ -92,9 +93,9 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
   private var clusterResourcesAvailable
     : Boolean = false //track to log whenever there is a switch from cluster resources being available to not being available
 
-  def canLaunch(memory: ByteSize, poolMemory: Long, poolConfig: ContainerPoolConfig, blackbox: Boolean): Boolean = {
+  def canLaunch(memory: ByteSize, poolMemory: Long, blackbox: Boolean): Boolean = {
 
-    if (allowMoreStarts(poolConfig)) {
+    if (allowMoreStarts()) {
       //only consider blackbox/nonblackbox reservations to match this invoker's usage
       val localRes = localReservations.filter(_._2.blackbox == blackbox).values.map(_.size) //active local reservations
       val remoteRes = remoteReservations.values.toList.flatten.filter(_.blackbox == blackbox).map(_.size) //remote/stale reservations
@@ -133,13 +134,13 @@ class AkkaClusterContainerResourceManager(system: ActorSystem,
   override def releaseReservation(ref: ActorRef): Unit = {
     localReservations = localReservations - ref
   }
-  def allowMoreStarts(config: ContainerPoolConfig): Boolean =
-    localReservations.size < config.clusterManagedResourceMaxStarts //only positive reservations affect ability to start
+  def allowMoreStarts(): Boolean =
+    localReservations.size < resourceManagerConfig.clusterManagedResourceMaxStarts //only positive reservations affect ability to start
 
   class ContainerPoolClusterData(instanceId: InvokerInstanceId, containerPool: ActorRef) extends Actor {
     //it is possible to use cluster managed resources, but not run the invoker in the cluster
     //when not using cluster boostrapping, you need to set akka seed node configs
-    if (poolConfig.useClusterBootstrap) {
+    if (resourceManagerConfig.useClusterBootstrap) {
       AkkaManagement(context.system).start()
       ClusterBootstrap(context.system).start()
     }

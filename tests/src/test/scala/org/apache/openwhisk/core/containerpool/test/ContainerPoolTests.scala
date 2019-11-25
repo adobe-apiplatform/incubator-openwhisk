@@ -130,12 +130,14 @@ class ContainerPoolTests
     (containers, factory)
   }
 
-  def poolConfig(userMemory: ByteSize, clusterMangedResources: Boolean = false, idleGrace: FiniteDuration = 0.seconds) =
-    ContainerPoolConfig(userMemory, 0.5, false, clusterMangedResources, false, 10, idleGrace)
+  def poolConfig(userMemory: ByteSize) =
+    ContainerPoolConfig(userMemory, 0.5, false)
+  def resMgrConfig(clusterMangedResources: Boolean = false, idleGrace: FiniteDuration = 0.seconds) =
+    ContainerResourceManagerConfig(clusterMangedResources, false, idleGrace, 10)
 
   val instanceId = InvokerInstanceId(0, userMemory = 1024.MB)
   behavior of "ContainerPool"
-  val resMgrFactory = (pool: ActorRef) => new LocalContainerResourceManager(pool)
+  val resMgrFactory = (pool: ActorRef) => new LocalContainerResourceManager(pool, poolConfig(256.MB))
   /*
    * CONTAINER SCHEDULING
    *
@@ -543,92 +545,6 @@ class ContainerPoolTests
     feed.expectMsg(MessageFeed.Processed)
   }
 
-  it should "process runbuffer instead of requesting new messages" in {
-
-    val (containers, factory) = testContainers(2)
-    val feed = TestProbe()
-
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 1), feed.ref))
-
-    val run1 = createRunMessage(action, invocationNamespace)
-    val run2 = createRunMessage(action, invocationNamespace)
-    val run3 = createRunMessage(action, invocationNamespace)
-
-    pool ! run1
-    pool ! run2 //will be buffered since the pool can only fit 1
-    pool ! run3 //will be buffered since the pool can only fit 1
-
-    //start first run
-    containers(0).expectMsg(run1)
-
-    //cannot launch more containers, so make sure additional containers are not created
-    containers(1).expectNoMessage(100.milliseconds)
-
-    //complete processing of first run
-    containers(0).send(pool, NeedWork(warmedData(run1)))
-
-    //don't feed till runBuffer is emptied
-    feed.expectNoMessage(100.milliseconds)
-
-    //start second run
-    containers(0).expectMsgPF() {
-      // The `Some` assures, that it has been retried while the first action was still blocking the invoker.
-      case Run(run2.action, run2.msg, Some(_)) => true
-    }
-
-    //complete processing of second run
-    containers(0).send(pool, NeedWork(warmedData(run2)))
-
-    //feed as part of last buffer item processing
-    feed.expectMsg(MessageFeed.Processed)
-
-    //start third run
-    containers(0).expectMsgPF() {
-      // The `Some` assures, that it has been retried while the first action was still blocking the invoker.
-      case Run(run3.action, run3.msg, None) => true
-    }
-
-    //complete processing of third run
-    containers(0).send(pool, NeedWork(warmedData(run3)))
-
-    //now we expect feed to send a new message (1 per completion = 2 new messages)
-    feed.expectMsg(MessageFeed.Processed)
-
-    //make sure only one though
-    feed.expectNoMessage(100.milliseconds)
-  }
-
-  it should "process runbuffer when container is removed" in {
-    val (containers, factory) = testContainers(2)
-    val feed = TestProbe()
-
-    val run1 = createRunMessage(action, invocationNamespace)
-    val run2 = createRunMessage(action, invocationNamespace)
-
-    val pool =
-      system.actorOf(ContainerPool.props(instanceId, factory, poolConfig(MemoryLimit.STD_MEMORY * 1), feed.ref))
-
-    //these will get buffered since allowLaunch is false
-    pool ! run1
-    pool ! run2
-
-    //start first run
-    containers(0).expectMsg(run1)
-
-    //trigger removal of the container ref, but don't start processing
-    containers(0).send(pool, RescheduleJob)
-
-    //trigger buffer processing by ContainerRemoved message
-    pool ! ContainerRemoved
-
-    //start second run
-    containers(1).expectMsgPF() {
-      // The `Some` assures, that it has been retried while the first action was still blocking the invoker.
-      case Run(run2.action, run2.msg, Some(_)) => true
-    }
-  }
-
   it should "increase activation counts when scheduling to containers whose actions support concurrency" in {
     assume(concurrencyEnabled)
     val (containers, factory) = testContainers(2)
@@ -714,10 +630,7 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
     val resMgr = new ContainerResourceManager {
-      override def canLaunch(size: ByteSize,
-                             poolMemory: Long,
-                             poolConfig: ContainerPoolConfig,
-                             blackbox: Boolean): Boolean = true
+      override def canLaunch(size: ByteSize, poolMemory: Long, blackbox: Boolean): Boolean = true
     }
 
     val pool = system.actorOf(
@@ -751,10 +664,7 @@ class ContainerPoolTests
       }
 
       //limit reservations to 2 containers
-      override def canLaunch(size: ByteSize,
-                             poolMemory: Long,
-                             poolConfig: ContainerPoolConfig,
-                             blackbox: Boolean): Boolean = {
+      override def canLaunch(size: ByteSize, poolMemory: Long, blackbox: Boolean): Boolean = {
 
         if (reservations >= 2) {
           false
@@ -791,48 +701,6 @@ class ContainerPoolTests
     reservations shouldBe 2
   }
 
-  //  it should "process runbuffer on ResourceUpdate" in {
-  //    val (containers, factory) = testContainers(2)
-  //    val feed = TestProbe()
-  //    //resMgr will start by returning false
-  //    var allowLaunch = false;
-  //    val resMgr = new ContainerResourceManager {
-  //      override def canLaunch(size: ByteSize,
-  //                             poolMemory: Long,
-  //                             poolConfig: ContainerPoolConfig,
-  //                             blackbox: Boolean): Boolean = {
-  //        allowLaunch
-  //      }
-  //    }
-  //    val run1 = createRunMessage(concurrentAction, invocationNamespace)
-  //    val run2 = createRunMessage(concurrentAction, invocationNamespace)
-  //
-  //    val pool = system.actorOf(
-  //      ContainerPool
-  //        .props(
-  //          instanceId,
-  //          factory,
-  //          poolConfig(MemoryLimit.STD_MEMORY, true),
-  //          feed.ref,
-  //
-  //          List(PrewarmingConfig(1, exec, memoryLimit))))
-  //
-  //    //these will get buffered since allowLaunch is false
-  //    pool ! run1
-  //    pool ! run2
-  //
-  //    containers(0).expectNoMessage() //will cause waiting
-  //    //now allow launching
-  //    allowLaunch = true
-  //    //trigger buffer processing by ContainerRemoved message
-  //    pool ! ResourceUpdate
-  //
-  //    containers(0).expectMsgPF() {
-  //      // The `Some` assures, that it has been retried while the first action was still blocking the invoker.
-  //      case Run(run1.action, run1.msg, Some(_)) => true
-  //    }
-  //    containers(0).expectMsg(run2)
-  //  }
   it should "release reservation on ContainerStarted" in {
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
@@ -847,8 +715,8 @@ class ContainerPoolTests
           List(PrewarmingConfig(1, exec, memoryLimit)),
           Some(resMgr)))
     (resMgr
-      .canLaunch(_: ByteSize, _: Long, _: ContainerPoolConfig, _: Boolean))
-      .expects(memoryLimit, 0, *, false)
+      .canLaunch(_: ByteSize, _: Long, _: Boolean))
+      .expects(memoryLimit, 0, false)
       .returning(true)
       .repeat(4)
 

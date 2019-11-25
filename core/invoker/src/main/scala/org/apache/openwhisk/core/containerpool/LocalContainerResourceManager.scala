@@ -20,12 +20,10 @@ import akka.actor.ActorRef
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.core.entity.ByteSize
 
-class LocalContainerResourceManager(pool: ActorRef)(implicit logging: Logging) extends ContainerResourceManager {
+class LocalContainerResourceManager(pool: ActorRef, poolConfig: ContainerPoolConfig)(implicit logging: Logging)
+    extends ContainerResourceManager {
   pool ! InitPrewarms //init prewarms immediately
-  override def canLaunch(size: ByteSize,
-                         poolMemory: Long,
-                         poolConfig: ContainerPoolConfig,
-                         blackbox: Boolean): Boolean = {
+  override def canLaunch(size: ByteSize, poolMemory: Long, blackbox: Boolean): Boolean = {
     poolMemory + size.toMB <= poolConfig.userMemory.toMB //in this impl we do not restrict starting of prewarm based on pool capacity
   }
 }

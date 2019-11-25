@@ -21,9 +21,11 @@ import akka.actor.{Actor, ActorRef, ActorRefFactory, Props}
 import java.time.Instant
 import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.{AkkaLogging, LoggingMarkers, TransactionId}
+import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.connector.MessageFeed
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
+import pureconfig.loadConfigOrThrow
 import scala.annotation.tailrec
 import scala.collection.immutable
 import scala.concurrent.duration._
@@ -70,11 +72,12 @@ class ContainerPool(instanceId: InvokerInstanceId,
   implicit val logging = new AkkaLogging(context.system.log)
   implicit val ec = context.dispatcher
 
+  val resMgrConfig = loadConfigOrThrow[ContainerResourceManagerConfig](ConfigKeys.containerResourceManager)
   val resourceManager: ContainerResourceManager = resMgr.getOrElse {
-    if (poolConfig.clusterManagedResources) {
-      new AkkaClusterContainerResourceManager(context.system, instanceId, self, poolConfig)
+    if (resMgrConfig.clusterManagedResources) {
+      new AkkaClusterContainerResourceManager(context.system, instanceId, self, resMgrConfig)
     } else {
-      new LocalContainerResourceManager(self)
+      new LocalContainerResourceManager(self, poolConfig)
     }
   }
 
@@ -141,12 +144,12 @@ class ContainerPool(instanceId: InvokerInstanceId,
                 // Only free up the amount, that is really needed to free up
                   .remove(
                     freePool,
-                    if (!poolConfig.clusterManagedResources) { //do not allow overprovision when cluster manages resources
+                    if (!resMgrConfig.clusterManagedResources) { //do not allow overprovision when cluster manages resources
                       Math.min(r.action.limits.memory.megabytes, memoryConsumptionOf(freePool)).MB
                     } else {
                       r.action.limits.memory.megabytes.MB
                     },
-                    Instant.now().minusSeconds(poolConfig.clusterManagedIdleGrace.toSeconds))
+                    Instant.now().minusSeconds(resMgrConfig.clusterManagedIdleGrace.toSeconds))
                   .map(a => removeContainer(a._1))
                   // If the list had at least one entry, enough containers were removed to start the new container. After
                   // removing the containers, we are not interested anymore in the containers that have been removed.
@@ -398,7 +401,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
    */
   def hasPoolSpaceFor[A](pool: Map[A, ContainerData], memory: ByteSize, blackbox: Boolean)(
     implicit tid: TransactionId): Boolean = {
-    resourceManager.canLaunch(memory, memoryConsumptionOf(pool), poolConfig, blackbox)
+    resourceManager.canLaunch(memory, memoryConsumptionOf(pool), blackbox)
   }
 
   /**

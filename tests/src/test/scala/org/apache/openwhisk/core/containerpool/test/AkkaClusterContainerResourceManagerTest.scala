@@ -35,6 +35,7 @@ import com.typesafe.config.ConfigFactory
 import org.apache.openwhisk.common.AkkaLogging
 import org.apache.openwhisk.core.containerpool.AkkaClusterContainerResourceManager
 import org.apache.openwhisk.core.containerpool.ContainerPoolConfig
+import org.apache.openwhisk.core.containerpool.ContainerResourceManagerConfig
 import org.apache.openwhisk.core.containerpool.Reservation
 import org.apache.openwhisk.core.entity.InvokerInstanceId
 import org.apache.openwhisk.utils.NodeStats
@@ -101,9 +102,14 @@ class AkkaClusterContainerResourceManagerTest
   it should "update nodestats async" in {
     val pool = TestProbe().testActor
     implicit val logging = new AkkaLogging(system.log)
-    val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, false, false, 10, 10.seconds)
+    val poolConfig = ContainerPoolConfig(2.MB, 0.5, false)
+    val resourceManagerConfig = ContainerResourceManagerConfig(false, false, 10.seconds, 10)
     val resMgr =
-      new AkkaClusterContainerResourceManager(system, InvokerInstanceId(0, userMemory = 2048.MB), pool, poolConfig)
+      new AkkaClusterContainerResourceManager(
+        system,
+        InvokerInstanceId(0, userMemory = 2048.MB),
+        pool,
+        resourceManagerConfig)
 
     val replicator = DistributedData(system).replicator
     val remoteAddr = SelfUniqueAddress(UniqueAddress(Address("tcp", "remoteSys"), 123l))
@@ -133,8 +139,8 @@ class AkkaClusterContainerResourceManagerTest
     //publish to local subscribers (ContainerPool)
     awaitAssert {
       resMgr.remoteReservedSize shouldBe 4096
-      resMgr.canLaunch(256.MB, 0, poolConfig, false) shouldBe true
-      resMgr.canLaunch(256.MB, 0, poolConfig, true) shouldBe false
+      resMgr.canLaunch(256.MB, 0, false) shouldBe true
+      resMgr.canLaunch(256.MB, 0, true) shouldBe false
     }
     //    resMgr.canLaunch(256.MB, 0, poolConfig, false, false) shouldBe true
   }
