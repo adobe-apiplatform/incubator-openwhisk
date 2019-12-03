@@ -65,6 +65,7 @@ class ContainerPool(instanceId: InvokerInstanceId,
                     feed: ActorRef,
                     prewarmConfig: List[PrewarmingConfig] = List.empty,
                     poolConfig: ContainerPoolConfig,
+                    resMgrConfig: ContainerResourceManagerConfig,
                     resMgr: Option[ContainerResourceManager] = None)
     extends Actor {
   import ContainerPool.memoryConsumptionOf
@@ -72,7 +73,6 @@ class ContainerPool(instanceId: InvokerInstanceId,
   implicit val logging = new AkkaLogging(context.system.log)
   implicit val ec = context.dispatcher
 
-  val resMgrConfig = loadConfigOrThrow[ContainerResourceManagerConfig](ConfigKeys.containerResourceManager)
   val resourceManager: ContainerResourceManager = resMgr.getOrElse {
     if (resMgrConfig.clusterManagedResources) {
       new AkkaClusterContainerResourceManager(context.system, instanceId, self, resMgrConfig)
@@ -532,8 +532,10 @@ object ContainerPool {
             poolConfig: ContainerPoolConfig,
             feed: ActorRef,
             prewarmConfig: List[PrewarmingConfig] = List.empty,
+            resMgrConfig: ContainerResourceManagerConfig =
+              loadConfigOrThrow[ContainerResourceManagerConfig](ConfigKeys.containerResourceManager),
             resMgr: Option[ContainerResourceManager] = None) =
-    Props(new ContainerPool(instanceId, factory, feed, prewarmConfig, poolConfig, resMgr))
+    Props(new ContainerPool(instanceId, factory, feed, prewarmConfig, poolConfig, resMgrConfig, resMgr))
 }
 
 /** Contains settings needed to perform container prewarming. */
