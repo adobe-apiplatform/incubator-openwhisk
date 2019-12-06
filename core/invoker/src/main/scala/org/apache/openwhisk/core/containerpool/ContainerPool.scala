@@ -285,6 +285,9 @@ class ContainerPool(instanceId: InvokerInstanceId,
       backfillPrewarms(false) //in case a prewarm is removed due to health failure or crash
 
       processBufferOrFeed()
+    case ContainerStarted => //only used for receiving post-start from cold container
+      //stop tracking via reserved
+      resourceManager.releaseReservation(sender())
     // This message is received for one of these reasons:
     // 1. Container errored while resuming a warm container, could not process the job, and sent the job back
     // 2. The container aged, is destroying itself, and was assigned a job which it had to send back
