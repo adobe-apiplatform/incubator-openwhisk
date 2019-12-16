@@ -42,8 +42,7 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient,
                    memory: ByteSize,
                    environment: Map[String, String],
                    labels: Map[String, String])(implicit transid: TransactionId): Pod = {
-    val newEnv = environment + ("POD_UID" -> "(v1.metadata.uid)")
-    val envVars = newEnv.map {
+    val envVars = environment.map {
       case (key, value) => new EnvVarBuilder().withName(key).withValue(value).build()
     }.toSeq
 
@@ -93,6 +92,8 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient,
       .withName("user-action")
       .withImage(image)
       .withEnv(envVars.asJava)
+      .addNewEnv().withName("POD_UID").withNewValueFrom().withNewFieldRef().withApiVersion("v1")
+      .withFieldPath("metadata.uid").endFieldRef().endValueFrom().endEnv()
       .addNewPort()
       .withContainerPort(8080)
       .withName("action")
