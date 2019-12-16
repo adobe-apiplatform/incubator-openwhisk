@@ -42,7 +42,8 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient,
                    memory: ByteSize,
                    environment: Map[String, String],
                    labels: Map[String, String])(implicit transid: TransactionId): Pod = {
-    val envVars = environment.map {
+    val newEnv = environment + ("POD_UID" -> "(v1.metadata.uid)")
+    val envVars = newEnv.map {
       case (key, value) => new EnvVarBuilder().withName(key).withValue(value).build()
     }.toSeq
 
