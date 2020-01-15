@@ -29,6 +29,7 @@ import akka.stream.scaladsl.Source
 import akka.stream.stage._
 import akka.stream.{ActorMaterializer, Attributes, Outlet, SourceShape}
 import akka.util.ByteString
+import collection.JavaConverters._
 import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.utils.Serialization
 import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient}
@@ -123,6 +124,9 @@ class KubernetesClient(
     }.recoverWith {
       case e =>
         log.error(this, s"Failed create pod for '$name': ${e.getClass} - ${e.getMessage}")
+        kubeRestClient.events.withField("involvedObject.name", name).list().getItems.asScala.foreach { podEvent =>
+          log.info(this, s"Pod event for failed pod '$name': $podEvent")
+        }
         Future.failed(new Exception(s"Failed to create pod '$name'"))
     }
   }
