@@ -341,6 +341,7 @@ object LoggingMarkers {
   private val loadbalancer = "loadbalancer"
   private val containerClient = "containerClient"
   private val containerPool = "containerPool"
+  private val clusterResourceManager = "clusterResources"
 
   /*
    * The following markers are used to emit log messages as well as metrics. Add all LogMarkerTokens below to
@@ -480,6 +481,18 @@ object LoggingMarkers {
   val CONTAINER_CLIENT_RETRIES =
     LogMarkerToken(containerClient, "retries", counter)(MeasurementUnit.none)
 
+  val CLUSTER_RESOURCES_RESERVED_COUNT =
+    LogMarkerToken(clusterResourceManager, "reservedCount", counter)(MeasurementUnit.none)
+  val CLUSTER_RESOURCES_RESERVED_SIZE =
+    LogMarkerToken(clusterResourceManager, "reservedSize", counter)(MeasurementUnit.information.megabytes)
+  val CLUSTER_RESOURCES_TOTAL_MEM =
+    LogMarkerToken(clusterResourceManager, "totalMemory", counter)(MeasurementUnit.information.megabytes)
+  val CLUSTER_RESOURCES_MAX_MEM =
+    LogMarkerToken(clusterResourceManager, "maxMemory", counter)(MeasurementUnit.information.megabytes)
+  val CLUSTER_RESOURCES_NODE_COUNT =
+    LogMarkerToken(clusterResourceManager, "nodes", counter)(MeasurementUnit.none)
+  val CONTAINER_POOL_RESOURCE_ERROR =
+    LogMarkerToken(containerPool, "resourceError", counter)(MeasurementUnit.none)
   val CONTAINER_POOL_RESCHEDULED_ACTIVATION =
     LogMarkerToken(containerPool, "rescheduledActivation", counter)(MeasurementUnit.none)
   val CONTAINER_POOL_RUNBUFFER_COUNT =

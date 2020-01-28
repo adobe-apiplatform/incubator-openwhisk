@@ -247,6 +247,9 @@ case class BlackboxStartupError(msg: String) extends ContainerStartupError(msg)
 /** Indicates an error while initializing a container */
 case class InitializationError(interval: Interval, response: ActivationResponse) extends Exception(response.toString)
 
+/** Indicates a resource availability error, which should be retried later since cluster resources may be changing. */
+case class ClusterResourceError(required: ByteSize) extends Exception("inadequate resources")
+
 case class Interval(start: Instant, end: Instant) {
   def duration = Duration.create(end.toEpochMilli() - start.toEpochMilli(), MILLISECONDS)
 }
