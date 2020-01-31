@@ -71,7 +71,7 @@ dependencies {
     compile "io.kamon:kamon-datadog_${gradle.scala.depVersion}:2.0.1"
 
     //for mesos
-    compile "com.adobe.api.platform.runtime:mesos-actor:0.0.17"
+    compile "com.adobe.api.platform.runtime:mesos-actor:0.0.31"
 
     //tracing support
     compile "io.opentracing:opentracing-api:0.31.0"
@@ -92,6 +92,10 @@ dependencies {
         exclude group: 'com.fasterxml.jackson.dataformat'
     }
     compile "com.amazonaws:aws-java-sdk-cloudfront:1.11.517"
+
+    compile "com.lightbend.akka.management:akka-management-cluster-bootstrap_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    compile "com.lightbend.akka.discovery:akka-discovery-kubernetes-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    compile "com.lightbend.akka.discovery:akka-discovery-marathon-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
 }
 
 configurations {

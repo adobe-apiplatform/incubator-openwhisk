@@ -17,6 +17,7 @@
 
 package org.apache.openwhisk.core.containerpool.test
 
+import akka.actor.ActorRef
 import java.time.Instant
 
 import scala.collection.mutable
@@ -31,8 +32,10 @@ import org.scalatest.junit.JUnitRunner
 import akka.actor.ActorRefFactory
 import akka.actor.ActorSystem
 import akka.testkit.ImplicitSender
+import akka.testkit.TestActorRef
 import akka.testkit.TestKit
 import akka.testkit.TestProbe
+import common.StreamLogging
 import common.WhiskProperties
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.connector.ActivationMessage
@@ -42,6 +45,7 @@ import org.apache.openwhisk.core.entity.ExecManifest.RuntimeManifest
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.connector.MessageFeed
+import org.apache.openwhisk.core.containerpool.ContainerData
 
 /**
  * Behavior tests for the ContainerPool
@@ -55,7 +59,8 @@ class ContainerPoolTests
     with FlatSpecLike
     with Matchers
     with BeforeAndAfterAll
-    with MockFactory {
+    with MockFactory
+    with StreamLogging {
 
   override def afterAll = TestKit.shutdownActorSystem(system)
 
@@ -311,7 +316,7 @@ class ContainerPoolTests
     val pool =
       system.actorOf(
         ContainerPool
-          .props(factory, poolConfig(0.MB), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
+          .props(factory, poolConfig(memoryLimit), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
     containers(0).expectMsg(Start(exec, memoryLimit))
   }
 
@@ -320,9 +325,8 @@ class ContainerPoolTests
     val feed = TestProbe()
 
     val pool =
-      system.actorOf(
-        ContainerPool
-          .props(factory, poolConfig(MemoryLimit.STD_MEMORY), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
+      system.actorOf(ContainerPool
+        .props(factory, poolConfig(MemoryLimit.STD_MEMORY * 2), feed.ref, List(PrewarmingConfig(1, exec, memoryLimit))))
     containers(0).expectMsg(Start(exec, memoryLimit))
     containers(0).send(pool, NeedWork(preWarmedData(exec.kind)))
     pool ! runMessage
@@ -520,6 +524,9 @@ class ContainerPoolTests
     // Action 6 is finished -> 512 free, process feed
     containers(6).send(pool, NeedWork(warmedData(runMessageDifferentVersion)))
     feed.expectMsg(MessageFeed.Processed)
+
+    //make sure only one though
+    feed.expectNoMessage(100.milliseconds)
   }
 
   it should "process runbuffer instead of requesting new messages" in {
@@ -742,6 +749,145 @@ class ContainerPoolTests
     containers(0).expectMsg(runMessageConcurrent)
   }
 
+  it should "init prewarms only when InitPrewarms message is sent, when ContainerResourceManager.autoStartPrewarming is false" in {
+    val (containers, factory) = testContainers(2)
+    val feed = TestProbe()
+    val resMgr = new ContainerResourceManager {
+      override def canLaunch(size: ByteSize, poolMemory: Long, blackbox: Boolean): Boolean = true
+    }
+
+    val pool = system.actorOf(
+      ContainerPool
+        .props(
+          factory,
+          poolConfig(MemoryLimit.STD_MEMORY),
+          feed.ref,
+          List(PrewarmingConfig(1, exec, memoryLimit)),
+          resMgr = Some(resMgr)))
+    //prewarms are not started immediately
+    containers(0).expectNoMessage(100.milliseconds)
+    //prewarms must be started explicitly (e.g. by the ContainerResourceManager)
+    pool ! InitPrewarms
+
+    containers(0).expectMsg(Start(exec, memoryLimit)) // container0 was prewarmed
+    containers(0).send(pool, NeedWork(preWarmedData(exec.kind)))
+    pool ! runMessage
+    containers(0).expectMsg(runMessage)
+
+  }
+
+  it should "limit the number of container prewarm starts" in {
+    val (containers, factory) = testContainers(3)
+    val feed = TestProbe()
+    var reservations = 0;
+    val resMgr = new ContainerResourceManager {
+      override def addReservation(ref: ActorRef, byteSize: ByteSize, blackbox: Boolean): Unit = {
+        reservations += 1
+      }
+
+      //limit reservations to 2 containers
+      override def canLaunch(size: ByteSize, poolMemory: Long, blackbox: Boolean): Boolean = {
+
+        if (reservations >= 2) {
+          false
+        } else {
+          true
+        }
+      }
+    }
+
+    val pool = system.actorOf(
+      ContainerPool
+        .props(
+          factory,
+          poolConfig(MemoryLimit.STD_MEMORY),
+          feed.ref,
+          List(PrewarmingConfig(3, exec, memoryLimit)), //configure 3 prewarms, but only allow 2 to start
+          resMgr = Some(resMgr)))
+    //prewarms are not started immediately
+    containers(0).expectNoMessage(100.milliseconds)
+
+    //prewarms must be started explicitly (e.g. by the ContainerResourceManager)
+    pool ! InitPrewarms
+
+    containers(0).expectMsg(Start(exec, memoryLimit)) // container0 was prewarmed
+
+    //second container should start
+    containers(1).expectMsg(Start(exec, memoryLimit)) // container1 was prewarmed
+
+    //third container should not start
+    containers(2).expectNoMessage(100.milliseconds)
+
+    //verify that resMgr.addReservation is called exactly twice
+    reservations shouldBe 2
+  }
+
+  it should "release reservation on ContainerStarted" in {
+    val (containers, factory) = testContainers(2)
+    val feed = TestProbe()
+    val resMgr = mock[ContainerResourceManager] //mock to capture invocations
+    val pool = TestActorRef(
+      ContainerPool
+        .props(
+          factory,
+          poolConfig(MemoryLimit.STD_MEMORY),
+          feed.ref,
+          List(PrewarmingConfig(1, exec, memoryLimit)),
+          resMgr = Some(resMgr)))
+    (resMgr
+      .canLaunch(_: ByteSize, _: Long, _: Boolean))
+      .expects(memoryLimit, 0, false)
+      .returning(true)
+      .repeat(3)
+
+    (resMgr.addReservation(_: ActorRef, _: ByteSize, _: Boolean)).expects(*, memoryLimit, *)
+
+    (() => resMgr.activationStartLogMessage()).expects().returning("").repeat(2)
+
+    //expect the container to become unused after second NeedWork
+    (resMgr.releaseReservation(_: ActorRef)).expects(containers(0).ref).atLeastOnce()
+
+    pool ! runMessageConcurrent
+    pool ! runMessageConcurrent
+
+    containers(0).expectMsg(runMessageConcurrent)
+    containers(0).send(pool, NeedWork(warmedData(runMessageConcurrent)))
+
+    containers(0).expectMsg(runMessageConcurrent)
+
+    //ContainerStarted will cause resMgr.releaseReservation call
+    containers(0).send(pool, ContainerStarted)
+  }
+
+  it should "release reservation on ContainerRemoved" in {
+    val (containers, factory) = testContainers(2)
+    val feed = TestProbe()
+    val resMgr = mock[ContainerResourceManager] //mock to capture invocations
+    val pool = TestActorRef(
+      ContainerPool
+        .props(
+          factory,
+          poolConfig(MemoryLimit.STD_MEMORY),
+          feed.ref,
+          List(PrewarmingConfig(1, exec, memoryLimit)),
+          resMgr = Some(resMgr)))
+    (resMgr
+      .canLaunch(_: ByteSize, _: Long, _: Boolean))
+      .expects(memoryLimit, 0, false)
+      .returning(true)
+      .repeat(1)
+
+    (resMgr.addReservation(_: ActorRef, _: ByteSize, _: Boolean)).expects(*, memoryLimit, *)
+
+    //expect releaseReservation after the failure
+    (resMgr.releaseReservation(_: ActorRef)).expects(containers(0).ref).atLeastOnce()
+
+    pool ! InitPrewarms //ContainerResourceManager would normally do this
+
+    //fail the container
+    containers(0).send(pool, ContainerRemoved)
+  }
+
   it should "backfill prewarms when prewarm containers are removed" in {
     val (containers, factory) = testContainers(6)
     val feed = TestProbe()
@@ -962,24 +1108,25 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
   behavior of "ContainerPool remove()"
 
   it should "not provide a container if pool is empty" in {
-    ContainerPool.remove(Map.empty, MemoryLimit.STD_MEMORY) shouldBe List.empty
+    ContainerPool.remove(Map.empty[Any, ContainerData], MemoryLimit.STD_MEMORY, Instant.now()) shouldBe Map.empty
   }
 
   it should "not provide a container from busy pool with non-warm containers" in {
     val pool = Map('none -> noData(), 'pre -> preWarmedData())
-    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY) shouldBe List.empty
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY, Instant.now()) shouldBe Map.empty
   }
 
   it should "not provide a container from pool if there is not enough capacity" in {
     val pool = Map('first -> warmedData())
 
-    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY * 2) shouldBe List.empty
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY * 2, Instant.now()) shouldBe Map.empty
   }
 
   it should "provide a container from pool with one single free container" in {
     val data = warmedData()
     val pool = Map('warm -> data)
-    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY) shouldBe List('warm)
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY, Instant.now()) shouldBe Map(
+      'warm -> data.action.limits.memory.megabytes.MB)
   }
 
   it should "provide oldest container from busy pool with multiple containers" in {
@@ -990,7 +1137,8 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
 
     val pool = Map('first -> first, 'second -> second, 'oldest -> oldest)
 
-    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY) shouldBe List('oldest)
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY, Instant.now()) shouldBe Map(
+      'oldest -> oldest.action.limits.memory.megabytes.MB)
   }
 
   it should "provide a list of the oldest containers from pool, if several containers have to be removed" in {
@@ -1002,7 +1150,9 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
 
     val pool = Map('first -> first, 'second -> second, 'third -> third, 'oldest -> oldest)
 
-    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY * 2) shouldBe List('oldest, 'first)
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY * 2, Instant.now()) shouldBe Map(
+      'oldest -> oldest.action.limits.memory.megabytes.MB,
+      'first -> first.action.limits.memory.megabytes.MB)
   }
 
   it should "provide oldest container (excluding concurrently busy) from busy pool with multiple containers" in {
@@ -1012,8 +1162,16 @@ class ContainerPoolObjectTests extends FlatSpec with Matchers with MockFactory {
     val oldest = warmedData(namespace = commonNamespace, lastUsed = Instant.ofEpochMilli(0), active = 3)
 
     var pool = Map('first -> first, 'second -> second, 'oldest -> oldest)
-    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY) shouldBe List('first)
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY, Instant.now()) shouldBe Map(
+      'first -> first.action.limits.memory.megabytes.MB)
     pool = pool - 'first
-    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY) shouldBe List('second)
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY, Instant.now()) shouldBe Map(
+      'second -> second.action.limits.memory.megabytes.MB)
+  }
+  it should "not remove container that is younger than idle grace instant" in {
+    val data = warmedData()
+    val idleGraceInstant = Instant.now().minusSeconds(5)
+    val pool = Map('warm -> data)
+    ContainerPool.remove(pool, MemoryLimit.STD_MEMORY, idleGraceInstant) shouldBe Map.empty
   }
 }

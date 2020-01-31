@@ -31,6 +31,8 @@ import akka.io.Tcp.CommandFailed
 import akka.io.Tcp.Connect
 import akka.io.Tcp.Connected
 import akka.pattern.pipe
+import org.apache.openwhisk.common.MetricEmitter
+import pureconfig.loadConfigOrThrow
 import pureconfig._
 import pureconfig.generic.auto._
 
@@ -202,6 +204,7 @@ case object RescheduleJob // job is sent back to parent and could not be process
 case class PreWarmCompleted(data: PreWarmedData)
 case class InitCompleted(data: WarmedData)
 case object RunCompleted
+case object ContainerStarted
 
 /**
  * A proxy that wraps a Container. It is used to keep track of the lifecycle
@@ -270,6 +273,9 @@ class ContainerProxy(factory: (TransactionId,
   var activeCount = 0;
   var healthPingActor: Option[ActorRef] = None //setup after prewarm starts
   val tcp: ActorRef = testTcp.getOrElse(IO(Tcp)) //allows to testing interaction with Tcp extension
+  //track the first run for easily referring to the action being initialized (it may fail)
+  var firstRun: Option[Run] = None
+
   startWith(Uninitialized, NoData())
 
   when(Uninitialized) {
@@ -291,6 +297,7 @@ class ContainerProxy(factory: (TransactionId,
     // cold start (no container to reuse or available stem cell container)
     case Event(job: Run, _) =>
       implicit val transid = job.msg.transid
+      firstRun = Some(job)
       activeCount += 1
       // create a new container
       val container = factory(
@@ -312,7 +319,9 @@ class ContainerProxy(factory: (TransactionId,
             // normalizes the life cycle for containers and their cleanup when activations fail
             self ! PreWarmCompleted(
               PreWarmedData(container, job.action.exec.kind, job.action.limits.memory.megabytes.MB, 1))
-
+          case Failure(_: ClusterResourceError) =>
+            // no side affects: the container did not come up due to resource errors; we will notify parent (which should retry)
+            MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESOURCE_ERROR)
           case Failure(t) =>
             // the container did not come up cleanly, so disambiguate the failure mode and then cleanup
             // the failure is either the system fault, or for docker actions, the application/developer fault
@@ -352,6 +361,12 @@ class ContainerProxy(factory: (TransactionId,
       context.parent ! NeedWork(completed.data)
       goto(Started) using completed.data
 
+    case Event(FailureMessage(e: ClusterResourceError), _) =>
+      MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESOURCE_ERROR)
+      logging.info(this, s"resources (${e.required}) unavailable during prewarm")
+      context.parent ! ContainerRemoved
+      stop()
+
     // container creation failed
     case Event(_: FailureMessage, _) =>
       context.parent ! ContainerRemoved
@@ -363,6 +378,7 @@ class ContainerProxy(factory: (TransactionId,
   when(Started) {
     case Event(job: Run, data: PreWarmedData) =>
       implicit val transid = job.msg.transid
+      firstRun = Some(job)
       activeCount += 1
       initializeAndRun(data.container, job)
         .map(_ => RunCompleted)
@@ -380,7 +396,9 @@ class ContainerProxy(factory: (TransactionId,
   when(Running) {
     // Intermediate state, we were able to start a container
     // and we keep it in case we need to destroy it.
-    case Event(completed: PreWarmCompleted, _) => stay using completed.data
+    case Event(completed: PreWarmCompleted, _) =>
+      context.parent ! ContainerStarted
+      stay using completed.data
 
     // Run during prewarm init (for concurrent > 1)
     case Event(job: Run, data: PreWarmedData) =>
@@ -403,6 +421,8 @@ class ContainerProxy(factory: (TransactionId,
 
     // Init was successful
     case Event(data: WarmedData, _: PreWarmedData) =>
+      //reset firstRun to be empty, no need to remember it now
+      firstRun = None
       //in case concurrency supported, multiple runs can begin as soon as init is complete
       context.parent ! NeedWork(data)
       stay using data
@@ -448,6 +468,19 @@ class ContainerProxy(factory: (TransactionId,
       rescheduleJob = true
       rejectBuffered()
       destroyContainer(newData)
+
+    // Failed at getting a container due to resource shortage during cold-start run - must retry on either NoData or PreWarmedData
+    case Event(FailureMessage(e: ClusterResourceError), _) =>
+      MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESOURCE_ERROR)
+      context.parent ! ContainerRemoved
+      firstRun.foreach { r =>
+        implicit val tid = r.msg.transid
+        logging.info(this, s"resources (${e.required}) unavailable during cold start, will retry run later")
+        //schedule some delay before resend - resource error will be cleared either by a) cluster scaling or b) other activations completing
+        context.system.scheduler.scheduleOnce(500.milliseconds, context.parent, r)
+      }
+      rejectBuffered()
+      stop()
 
     // Failed after /init (the first run failed)
     case Event(_: FailureMessage, data: PreWarmedData) =>

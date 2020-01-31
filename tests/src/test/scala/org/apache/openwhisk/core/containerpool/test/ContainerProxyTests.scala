@@ -19,7 +19,6 @@ package org.apache.openwhisk.core.containerpool.test
 
 import java.net.InetSocketAddress
 import java.time.Instant
-
 import akka.actor.FSM.{CurrentState, SubscribeTransitionCallBack, Transition}
 import akka.actor.{ActorRef, ActorSystem, FSM}
 import akka.stream.scaladsl.Source
@@ -149,6 +148,9 @@ class ContainerProxyTests
   def run(machine: ActorRef, currentState: ContainerState) = {
     machine ! Run(action, message)
     expectMsg(Transition(machine, currentState, Running))
+    if (currentState == Uninitialized) {
+      expectMsg(ContainerStarted)
+    }
     expectWarmed(invocationNamespace.name, action)
     expectMsg(Transition(machine, Running, Ready))
   }
@@ -548,6 +550,7 @@ class ContainerProxyTests
 
     machine ! Run(noLogsAction, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectWarmed(invocationNamespace.name, noLogsAction)
     expectMsg(Transition(machine, Running, Ready))
 
@@ -784,6 +787,7 @@ class ContainerProxyTests
   private def sendActivationMessage(machine: ActorRef, message: ActivationMessage, action: ExecutableWhiskAction) = {
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectWarmed(invocationNamespace.name, action)
     expectMsg(Transition(machine, Running, Ready))
   }
@@ -1069,6 +1073,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -1122,6 +1127,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -1161,6 +1167,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -1199,6 +1206,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
@@ -1478,6 +1486,7 @@ class ContainerProxyTests
 
     // Finish /init, note that /run and log-collecting happens nonetheless
     initPromise.success(Interval.zero)
+    expectMsg(ContainerStarted)
     expectWarmed(invocationNamespace.name, action)
     expectMsg(Transition(machine, Running, Ready))
 

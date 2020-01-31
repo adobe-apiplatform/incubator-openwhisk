@@ -256,6 +256,9 @@ case class InitializationError(interval: Interval, response: ActivationResponse)
 /** Indicates a connection error after resuming a container */
 case class ContainerHealthError(tid: TransactionId, msg: String) extends Exception(msg)
 
+/** Indicates a resource availability error, which should be retried later since cluster resources may be changing. */
+case class ClusterResourceError(required: ByteSize) extends Exception("inadequate resources")
+
 case class Interval(start: Instant, end: Instant) {
   def duration = Duration.create(end.toEpochMilli() - start.toEpochMilli(), MILLISECONDS)
 }

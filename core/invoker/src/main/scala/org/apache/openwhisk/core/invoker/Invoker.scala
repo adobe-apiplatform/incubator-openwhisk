@@ -147,7 +147,7 @@ object Invoker {
     val topicName = topicBaseName + assignedInvokerId
 
     val maxMessageBytes = Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT)
-    val invokerInstance =
+    invokerInstance =
       InvokerInstanceId(assignedInvokerId, cmdLineArgs.uniqueName, cmdLineArgs.displayedName, poolConfig.userMemory)
 
     val msgProvider = SpiLoader.get[MessagingProvider]
@@ -173,6 +173,7 @@ object Invoker {
       actorSystem,
       ActorMaterializer.create(actorSystem))
   }
+  var invokerInstance: InvokerInstanceId = null //make this instanceId available to simply akka/mesos access to it
 }
 
 /**
