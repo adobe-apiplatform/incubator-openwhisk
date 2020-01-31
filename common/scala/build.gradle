@@ -58,6 +58,8 @@ dependencies {
     compile "com.github.ben-manes.caffeine:caffeine:2.6.2"
     compile "com.google.code.findbugs:jsr305:3.0.2"
     compile "io.fabric8:kubernetes-client:${gradle.kube_client.version}"
+    compile "io.kubernetes:client-java:6.0.1"
+    compile 'com.microsoft.azure:adal4j:1.6.4'
 
     //metrics
     compile ("io.kamon:kamon-core_${gradle.scala.depVersion}:2.0.3") {

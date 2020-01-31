@@ -17,24 +17,33 @@
 
 package org.apache.openwhisk.core.containerpool.kubernetes
 
-import java.io.IOException
+import java.io.{FileReader, IOException}
 import java.net.SocketTimeoutException
 import java.time.format.DateTimeFormatterBuilder
 import java.time.{Instant, ZoneId}
+import java.util.concurrent.TimeUnit
+
 import akka.actor.ActorSystem
 import akka.event.Logging.ErrorLevel
 import akka.event.Logging.InfoLevel
 import akka.http.scaladsl.model.Uri
 import akka.http.scaladsl.model.Uri.{Path, Query}
-import akka.pattern.after
+import com.google.gson.reflect.TypeToken
+import com.squareup.okhttp.OkHttpClient
+import io.kubernetes.client.Configuration
+import io.kubernetes.client.models.V1PodList
+import io.kubernetes.client.util.{ClientBuilder, KubeConfig, Watch}
+//import akka.pattern.after
 import akka.stream.scaladsl.Source
 import akka.stream.stage._
 import akka.stream.{ActorMaterializer, Attributes, Outlet, SourceShape}
 import akka.util.ByteString
 import collection.JavaConverters._
-import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.utils.Serialization
 import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient}
+import io.kubernetes.client.{ApiClient}
+import io.kubernetes.client.apis.CoreV1Api
+import io.kubernetes.client.models.{V1Pod}
 import okhttp3.{Call, Callback, Request, Response}
 import okio.BufferedSource
 import org.apache.openwhisk.common.LoggingMarkers
@@ -48,12 +57,14 @@ import pureconfig._
 import pureconfig.generic.auto._
 import spray.json.DefaultJsonProtocol._
 import spray.json._
+
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.concurrent.duration._
 import scala.concurrent.{blocking, ExecutionContext, Future}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
+import util.control.Breaks._
 
 /**
  * Configuration for kubernetes client command timeouts.
@@ -104,6 +115,16 @@ class KubernetesClient(
     new DefaultKubernetesClient(configBuilder.build())
   }
 
+  val kubeConfigPath = "/Users/tnorris/kubeconfigs/team-kubeconfig.yaml" //System.getProperty("kubeconfig", "noconfig")
+  implicit protected val kClient: ApiClient =
+    ClientBuilder.kubeconfig(KubeConfig.loadKubeConfig(new FileReader(kubeConfigPath))).build
+  val httpClient: OkHttpClient = kClient.getHttpClient
+  httpClient.setReadTimeout(0, TimeUnit.SECONDS)
+  kClient.setHttpClient(httpClient)
+
+  // set the global default api-client to the in-cluster one from above
+  Configuration.setDefaultApiClient(kClient)
+
   private val podBuilder = new WhiskPodBuilder(kubeRestClient, config.userPodNodeAffinity, config.podTemplate)
 
   def run(name: String,
@@ -132,7 +153,13 @@ class KubernetesClient(
         throw e
     }
     //wait for the pod to become ready; catch any failure to end the transaction timer
-    waitForPod(namespace, p, start.start, config.timeouts.run)
+    waitForPod(
+      kClient,
+      namespace,
+      name,
+      config.timeouts.run, //original timeout is only used for exception handling
+      config.timeouts.run - (System
+        .currentTimeMillis() - start.start.toEpochMilli).milliseconds) //updated timeout excludes time spent during create
       .map { readyPod =>
         val c = toContainer(readyPod)
         transid.finished(this, start, logLevel = InfoLevel)
@@ -245,7 +272,48 @@ class KubernetesClient(
 
   }
 
-  protected def toContainer(pod: Pod): KubernetesContainer = {
+//  protected def toContainer(pod: Pod): KubernetesContainer = {
+//    val id = ContainerId(pod.getMetadata.getName)
+//
+//    val portFwd = if (config.portForwardingEnabled) {
+//      Some(kubeRestClient.pods().withName(pod.getMetadata.getName).portForward(8080))
+//    } else None
+//
+//    val addr = portFwd
+//      .map(fwd => ContainerAddress("localhost", fwd.getLocalPort))
+//      .getOrElse(ContainerAddress(pod.getStatus.getPodIP))
+//    val workerIP = pod.getStatus.getHostIP
+//    // Extract the native (docker or containerd) containerId for the container
+//    // By convention, kubernetes adds a docker:// prefix when using docker as the low-level container engine
+//    val nativeContainerId = pod.getStatus.getContainerStatuses.get(0).getContainerID.stripPrefix("docker://")
+//    implicit val kubernetes = this
+//    new KubernetesContainer(id, addr, workerIP, nativeContainerId, portFwd)
+//  }
+
+//  // check for ready status every 1 second until timeout (minus the start time, which is the time for the pod create call) has past
+//  private def waitForPod(namespace: String,
+//                         pod: Pod,
+//                         start: Instant,
+//                         timeout: FiniteDuration,
+//                         deadlineOpt: Option[Deadline] = None): Future[Pod] = {
+//    val readyPod = kubeRestClient
+//      .pods()
+//      .inNamespace(namespace)
+//      .withName(pod.getMetadata.getName)
+//    val deadline = deadlineOpt.getOrElse((timeout - (System.currentTimeMillis() - start.toEpochMilli).millis).fromNow)
+//    if (!readyPod.isReady) {
+//      if (deadline.isOverdue()) {
+//        Future.failed(KubernetesTimeoutException(timeout))
+//      } else {
+//        after(1.seconds, scheduler) {
+//          waitForPod(namespace, pod, start, timeout, Some(deadline))
+//        }
+//      }
+//    } else {
+//      Future.successful(readyPod.get())
+//    }
+//  }
+  protected def toContainer(pod: V1Pod): KubernetesContainer = {
     val id = ContainerId(pod.getMetadata.getName)
 
     val portFwd = if (config.portForwardingEnabled) {
@@ -262,28 +330,71 @@ class KubernetesClient(
     implicit val kubernetes = this
     new KubernetesContainer(id, addr, workerIP, nativeContainerId, portFwd)
   }
+  private def waitForPod(client: ApiClient,
+                         namespace: String,
+                         podName: String,
+                         originalTimeout: FiniteDuration,
+                         remainingTimeout: FiniteDuration): Future[V1Pod] = {
+    val api = new CoreV1Api()
 
-  // check for ready status every 1 second until timeout (minus the start time, which is the time for the pod create call) has past
-  private def waitForPod(namespace: String,
-                         pod: Pod,
-                         start: Instant,
-                         timeout: FiniteDuration,
-                         deadlineOpt: Option[Deadline] = None): Future[Pod] = {
-    val readyPod = kubeRestClient
-      .pods()
-      .inNamespace(namespace)
-      .withName(pod.getMetadata.getName)
-    val deadline = deadlineOpt.getOrElse((timeout - (System.currentTimeMillis() - start.toEpochMilli).millis).fromNow)
-    if (!readyPod.isReady) {
-      if (deadline.isOverdue()) {
-        Future.failed(KubernetesTimeoutException(timeout))
-      } else {
-        after(1.seconds, scheduler) {
-          waitForPod(namespace, pod, start, timeout, Some(deadline))
+    println(s"waiting for ${remainingTimeout}")
+    val startPodList: V1PodList =
+      api.listNamespacedPod(
+        namespace,
+        null,
+        null,
+        s"metadata.name=${podName}",
+        null,
+        10,
+        null,
+        remainingTimeout.toSeconds.toInt,
+        false)
+    val resVersion = startPodList.getMetadata.getResourceVersion
+    val watch: Watch[V1PodList] = Watch
+      .createWatch(
+        client,
+        api.listNamespacedPodCall(
+          namespace,
+          null,
+          null,
+          s"metadata.name=${podName}",
+          null,
+          10,
+          resVersion,
+          remainingTimeout.toSeconds.toInt,
+          true,
+          null,
+          null),
+        new TypeToken[Watch.Response[V1PodList]]() {}
+          .getType())
+
+    Future {
+      blocking {
+        var pod: V1Pod = null
+        var isReady = false
+        try {
+          val watchList = watch.iterator().asScala
+          breakable {
+            for (r <- watchList) {
+              //The podList we get from the watch does not contain the list of pods for some reason
+              //val podList = r.`object`
+              pod = api.readNamespacedPod(podName, namespace, null, null, null)
+              isReady = pod.getStatus.getConditions.asScala
+                .filter(_.getType == "Ready")
+                .map(_.getStatus)
+                .contains("True")
+              if (isReady) break
+            }
+          }
+        } finally {
+          println("closing")
+          watch.close
         }
+        if (!isReady) {
+          throw KubernetesTimeoutException(originalTimeout)
+        }
+        pod
       }
-    } else {
-      Future.successful(readyPod.get())
     }
   }
 }
