@@ -17,14 +17,10 @@
 
 package org.apache.openwhisk.core.controller
 
-import scala.concurrent.Future
-import scala.util.{Failure, Success}
-
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.server.{RequestContext, RouteResult}
 import akka.http.scaladsl.unmarshalling.Unmarshaller
-
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.controller.RestApiCommons.{ListLimit, ListSkip}
 import org.apache.openwhisk.core.database.{CacheChangeNotification, DocumentTypeMismatchException, NoDocumentException}
@@ -33,6 +29,9 @@ import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.types.EntityStore
 import org.apache.openwhisk.http.ErrorResponse.terminate
 import org.apache.openwhisk.http.Messages
+
+import scala.concurrent.Future
+import scala.util.{Failure, Success}
 
 trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
   services: WhiskServices =>
@@ -157,7 +156,7 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
    */
   override def fetch(user: Identity, entityName: FullyQualifiedEntityName, env: Option[Parameters])(
     implicit transid: TransactionId) = {
-    getEntity(WhiskPackage.get(entityStore, entityName.toDocId), Some { mergePackageWithBinding() _ })
+    getEntity(WhiskPackage.get(entityStore, entityName.toDocId), Some { mergePackageWithBinding(user) _ })
   }
 
   /**
@@ -293,7 +292,7 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
    * If this is a binding, fetch package for binding, merge parameters then emit.
    * Otherwise this is a package, emit it.
    */
-  private def mergePackageWithBinding(ref: Option[WhiskPackage] = None)(wp: WhiskPackage)(
+  private def mergePackageWithBinding(user:Identity, ref: Option[WhiskPackage] = None)(wp: WhiskPackage)(
     implicit transid: TransactionId): RequestContext => Future[RouteResult] = {
     wp.binding map {
       case b: Binding =>
@@ -304,16 +303,25 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
           terminate(UnprocessableEntity, Messages.packageBindingCircularReference(b.fullyQualifiedName.toString))
         } else {
           getEntity(WhiskPackage.get(entityStore, docid), Some {
-            mergePackageWithBinding(Some { wp }) _
+            mergePackageWithBinding(user, Some {
+              if (wp.namespace.namespace == user.namespace.name.name)
+                wp.copy(parameters = ParameterEncryption.unlock(wp.parameters))
+              else wp }) _
           })
         }
     } getOrElse {
-      val pkg = ref map { _ inherit wp.parameters } getOrElse wp
+      val pkg = ref map { _ inherit (
+        if (wp.namespace.namespace == user.namespace.name.name)
+          ParameterEncryption.unlock(wp.parameters)
+        else wp.parameters)} getOrElse wp
       logging.debug(this, s"fetching package actions in '${wp.fullPath}'")
       val actions = WhiskAction.listCollectionInNamespace(entityStore, wp.fullPath, skip = 0, limit = 0) flatMap {
         case Left(list) =>
           Future.successful {
-            pkg withPackageActions (list map { o =>
+            (if (wp.namespace.namespace == user.namespace.name.name)
+              pkg.copy(parameters = ParameterEncryption.unlock(pkg.parameters))
+            else pkg) withPackageActions
+             (list map { o =>
               WhiskPackageAction.serdes.read(o)
             })
           }
@@ -327,7 +335,7 @@ trait WhiskPackagesApi extends WhiskCollectionAPI with ReferencedEntities {
       onComplete(actions) {
         case Success(p) =>
           logging.debug(this, s"[GET] entity success")
-          complete(OK, p)
+            complete(OK, p)
         case Failure(t) =>
           logging.error(this, s"[GET] failed: ${t.getMessage}")
           terminate(InternalServerError)

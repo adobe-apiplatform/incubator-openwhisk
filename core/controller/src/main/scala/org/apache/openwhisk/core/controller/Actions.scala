@@ -347,16 +347,29 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
             val mergedAction = env map {
               action inherit _
             } getOrElse action
+            // Cannot unlock here as the WhiskAction doesn't carry any data about bindings. Therefore unlocking here
+            // could cause leaks of the secrets from a bound function into another namespace. The CLI doesn't show
+            // the metadata but it is returned in the body which is where the leak happens.
+//            if (user.namespace.name == entityName.namespace) {
+//              complete(OK, mergedAction.copy(parameters = ParameterEncryption.unlock(mergedAction.parameters)))
+//            } else {
             complete(OK, mergedAction)
+//            }
           })
         case false =>
-          getEntity(WhiskActionMetaData.resolveActionAndMergeParameters(entityStore, entityName), Some {
-            action: WhiskActionMetaData =>
+          getEntity(
+            WhiskActionMetaData.resolveActionAndMergeParameters(entityStore, entityName),
+            Some { action: WhiskActionMetaData =>
               val mergedAction = env map {
                 action inherit _
               } getOrElse action
-              complete(OK, mergedAction)
-          })
+              if (user.namespace.name == entityName.namespace && (action.binding.isEmpty)) {
+                val clearAction = mergedAction.copy(parameters = ParameterEncryption.unlock(mergedAction.parameters))
+                complete(OK, clearAction)
+              } else {
+                complete(OK, mergedAction)
+              }
+            })
       }
     }
   }
