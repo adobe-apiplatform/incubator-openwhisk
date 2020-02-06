@@ -71,7 +71,7 @@ dependencies {
     compile "io.kamon:kamon-datadog_${gradle.scala.depVersion}:2.0.1"
 
     //for mesos
-    compile "com.adobe.api.platform.runtime:mesos-actor:0.0.32"
+    compile "com.adobe.api.platform.runtime:mesos-actor:0.0.33"
 
     //tracing support
     compile "io.opentracing:opentracing-api:0.31.0"
