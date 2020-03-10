@@ -257,6 +257,7 @@ object ConfigKeys {
   val controllerActivation = s"$controller.activation"
 
   val activationStore = "whisk.activation-store"
+  val elasticSearchActivationStore = s"$activationStore.elasticsearch"
   val activationStoreWithFileStorage = s"$activationStore.with-file-storage"
 
   val metrics = "whisk.metrics"
@@ -266,4 +267,6 @@ object ConfigKeys {
   val swaggerUi = "whisk.swagger-ui"
 
   val apacheClientConfig = "whisk.apache-client"
+
+  val parameterStorage = "whisk.parameter-storage"
 }

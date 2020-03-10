@@ -679,7 +679,14 @@ class ContainerProxy(factory: (TransactionId,
   def initializeAndRun(container: Container, job: Run, reschedule: Boolean = false)(
     implicit tid: TransactionId): Future[WhiskActivation] = {
     val actionTimeout = job.action.limits.timeout.duration
-    val (env, parameters) = ContainerProxy.partitionArguments(job.msg.content, job.msg.initArgs)
+    val unlockedContent = job.msg.content match {
+      case Some(js) => {
+        Some(ParameterEncryption.unlock(Parameters.readMergedList(js)).toJsObject)
+      }
+      case _ => job.msg.content
+    }
+
+    val (env, parameters) = ContainerProxy.partitionArguments(unlockedContent, job.msg.initArgs)
 
     val environment = Map(
       "namespace" -> job.msg.user.namespace.name.toJson,
@@ -701,7 +708,8 @@ class ContainerProxy(factory: (TransactionId,
       case data: WarmedData =>
         Future.successful(None)
       case _ =>
-        val owEnv = (authEnvironment ++ environment + ("deadline" -> (Instant.now.toEpochMilli + actionTimeout.toMillis).toString.toJson)) map {
+        val owEnv = (authEnvironment ++ environment ++ Map(
+          "deadline" -> (Instant.now.toEpochMilli + actionTimeout.toMillis).toString.toJson)) map {
           case (key, value) => "__OW_" + key.toUpperCase -> value
         }
 
