@@ -141,7 +141,7 @@ class KubernetesClient(
     //create the pod; catch any failure to end the transaction timer
     val createdPod = try {
       val created = kubeRestClient.pods.inNamespace(namespace).create(pod)
-      pdb.foreach(
+      pdb.map(
         p =>
           kubeRestClient.policy.podDisruptionBudget
             .inNamespace(namespace)
