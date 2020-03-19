@@ -17,7 +17,7 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.microsoft.azure.cosmosdb.internal.Constants.Properties.{AGGREGATE, E_TAG, ID, SELF_LINK}
+import com.azure.data.cosmos.internal.Constants.Properties.{AGGREGATE, E_TAG, ID, SELF_LINK}
 import org.apache.openwhisk.core.database.cosmosdb.CosmosDBConstants._
 import org.apache.openwhisk.core.database.StoreUtils.transform
 import spray.json.{JsObject, JsString}

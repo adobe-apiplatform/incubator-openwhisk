@@ -17,39 +17,40 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.microsoft.azure.cosmosdb.{FeedResponse, Resource, ResourceResponse}
+import java.util.function.Consumer
+
+import com.azure.data.cosmos.{FeedResponse, Resource}
+import com.azure.data.cosmos.internal.ResourceResponse
+import reactor.core.publisher.Flux
 import rx.Observable
-import rx.functions.Action1
 
 import scala.collection.JavaConverters._
 import scala.concurrent.{Future, Promise}
 
 private[cosmosdb] trait RxObservableImplicits {
 
-  implicit class RxScalaObservable[T](observable: Observable[T]) {
+  implicit class RxScalaObservable[T](observable: Flux[T]) {
 
     /**
-     * Returns the head of the [[Observable]] in a [[scala.concurrent.Future]].
+     * Returns the head of the [[Flux]] in a [[scala.concurrent.Future]].
      *
-     * @return the head result of the [[Observable]].
+     * @return the head result of the [[Flux]].
      */
     def head(): Future[T] = {
-      def toHandler[P](f: (P) => Unit): Action1[P] = (t: P) => f(t)
-
+      def toHandler[P](f: (P) => Unit): Consumer[P] = (t: P) => f(t)
       val promise = Promise[T]()
       observable.single.subscribe(toHandler(promise.success), toHandler(promise.failure))
       promise.future
     }
   }
 
-  implicit class RxScalaResourceObservable[T <: Resource](observable: Observable[ResourceResponse[T]]) {
-    def blockingResult(): T = observable.toBlocking.single.getResource
+  implicit class RxScalaResourceObservable[T <: Resource](observable: Flux[ResourceResponse[T]]) {
+    def blockingResult(): T = observable.blockFirst().getResource
   }
 
-  implicit class RxScalaFeedObservable[T <: Resource](observable: Observable[FeedResponse[T]]) {
+  implicit class RxScalaFeedObservable[T <: Resource](observable: Flux[FeedResponse[T]]) {
     def blockingOnlyResult(): Option[T] = {
-      val value = observable.toBlocking.single
-      val results = value.getResults.asScala
+      val results = observable.blockLast().results().asScala
       require(results.isEmpty || results.size == 1, s"More than one result found $results")
       results.headOption
     }

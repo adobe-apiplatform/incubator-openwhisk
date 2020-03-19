@@ -17,17 +17,8 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.microsoft.azure.cosmosdb.{
-  Database,
-  DocumentCollection,
-  FeedResponse,
-  RequestOptions,
-  Resource,
-  SqlParameter,
-  SqlParameterCollection,
-  SqlQuerySpec
-}
-import com.microsoft.azure.cosmosdb.rx.AsyncDocumentClient
+import com.azure.data.cosmos.internal.{AsyncDocumentClient, Database, DocumentCollection, RequestOptions}
+import com.azure.data.cosmos.{FeedResponse, Resource, SqlParameter, SqlParameterList, SqlQuerySpec}
 import org.apache.openwhisk.common.Logging
 
 import scala.collection.JavaConverters._
@@ -54,7 +45,7 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
 
   private def getOrCreateCollection(database: Database)(implicit logging: Logging) = {
     client
-      .queryCollections(database.getSelfLink, querySpec(collName), null)
+      .queryCollections(database.selfLink, querySpec(collName), null)
       .blockingOnlyResult()
       .map { coll =>
         val expectedIndexingPolicy = viewMapper.indexingPolicy
@@ -69,13 +60,13 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
         coll
       }
       .getOrElse {
-        client.createCollection(database.getSelfLink, newDatabaseCollection, dbOptions).blockingResult()
+        client.createCollection(database.selfLink, newDatabaseCollection, dbOptions).blockFirst().getResource
       }
   }
 
   private def newDatabaseCollection = {
     val defn = new DocumentCollection
-    defn.setId(collName)
+    defn.id(collName)
     defn.setIndexingPolicy(viewMapper.indexingPolicy.asJava())
     defn.setPartitionKey(viewMapper.partitionKeyDefn)
     val ttl = config.timeToLive.map(_.toSeconds.toInt).getOrElse(-1)
@@ -91,7 +82,7 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
 
   private def newDatabase = {
     val databaseDefinition = new Database
-    databaseDefinition.setId(config.db)
+    databaseDefinition.id(config.db)
     databaseDefinition
   }
 
@@ -99,7 +90,7 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
    * Prepares a query for fetching any resource by id
    */
   protected def querySpec(id: String) =
-    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", new SqlParameterCollection(new SqlParameter("@id", id)))
+    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", new SqlParameterList(new SqlParameter("@id", id)))
 
-  protected def asVector[T <: Resource](r: FeedResponse[T]): Vector[T] = r.getResults.asScala.toVector
+  protected def asVector[T <: Resource](r: FeedResponse[T]): Vector[T] = r.results.asScala.toVector
 }

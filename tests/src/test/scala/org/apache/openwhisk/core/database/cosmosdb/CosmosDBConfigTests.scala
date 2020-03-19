@@ -20,7 +20,7 @@ import com.typesafe.config.ConfigFactory
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
-import com.microsoft.azure.cosmosdb.{ConnectionMode, ConnectionPolicy => JConnectionPolicy}
+import com.azure.data.cosmos.{ConnectionMode, ConnectionPolicy => JConnectionPolicy}
 
 import scala.collection.JavaConverters._
 
@@ -41,20 +41,20 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
 
     //Cosmos SDK does not have equals defined so match them explicitly
     val policy = cosmos.connectionPolicy.asJava
-    val defaultPolicy = JConnectionPolicy.GetDefault()
-    policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
-    policy.getEnableEndpointDiscovery shouldBe defaultPolicy.getEnableEndpointDiscovery
-    policy.getIdleConnectionTimeoutInMillis shouldBe defaultPolicy.getIdleConnectionTimeoutInMillis
-    policy.getMaxPoolSize shouldBe defaultPolicy.getMaxPoolSize
-    policy.getPreferredLocations shouldBe defaultPolicy.getPreferredLocations
-    policy.getRequestTimeoutInMillis shouldBe defaultPolicy.getRequestTimeoutInMillis
-    policy.isUsingMultipleWriteLocations shouldBe defaultPolicy.isUsingMultipleWriteLocations
+    val defaultPolicy = JConnectionPolicy.defaultPolicy()
+    policy.connectionMode shouldBe defaultPolicy.connectionMode
+    policy.enableEndpointDiscovery shouldBe defaultPolicy.enableEndpointDiscovery
+    policy.idleConnectionTimeoutInMillis shouldBe defaultPolicy.idleConnectionTimeoutInMillis
+    policy.maxPoolSize shouldBe defaultPolicy.maxPoolSize
+    policy.preferredLocations shouldBe defaultPolicy.preferredLocations
+    policy.requestTimeoutInMillis shouldBe defaultPolicy.requestTimeoutInMillis
+    policy.usingMultipleWriteLocations shouldBe defaultPolicy.usingMultipleWriteLocations
 
-    val retryOpts = policy.getRetryOptions
-    val defaultOpts = defaultPolicy.getRetryOptions
+    val retryOpts = policy.retryOptions
+    val defaultOpts = defaultPolicy.retryOptions
 
-    retryOpts.getMaxRetryAttemptsOnThrottledRequests shouldBe defaultOpts.getMaxRetryAttemptsOnThrottledRequests
-    retryOpts.getMaxRetryWaitTimeInSeconds shouldBe defaultOpts.getMaxRetryWaitTimeInSeconds
+    retryOpts.maxRetryAttemptsOnThrottledRequests shouldBe defaultOpts.maxRetryAttemptsOnThrottledRequests
+    retryOpts.maxRetryWaitTimeInSeconds shouldBe defaultOpts.maxRetryWaitTimeInSeconds
   }
 
   it should "work with generic config" in {
@@ -89,10 +89,10 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
 
     cosmos.connectionPolicy.maxPoolSize shouldBe 42
     val policy = cosmos.connectionPolicy.asJava
-    val defaultPolicy = JConnectionPolicy.GetDefault()
-    policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
-    policy.getRetryOptions.getMaxRetryAttemptsOnThrottledRequests shouldBe defaultPolicy.getRetryOptions.getMaxRetryAttemptsOnThrottledRequests
-    policy.getRetryOptions.getMaxRetryWaitTimeInSeconds shouldBe defaultPolicy.getRetryOptions.getMaxRetryWaitTimeInSeconds
+    val defaultPolicy = JConnectionPolicy.defaultPolicy()
+    policy.connectionMode shouldBe defaultPolicy.connectionMode
+    policy.retryOptions.maxRetryAttemptsOnThrottledRequests shouldBe defaultPolicy.retryOptions.maxRetryAttemptsOnThrottledRequests
+    policy.retryOptions.maxRetryWaitTimeInSeconds shouldBe defaultPolicy.retryOptions.maxRetryWaitTimeInSeconds
   }
 
   it should "work with specific extended config" in {
@@ -112,7 +112,7 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
       |        connection-policy {
       |           using-multiple-write-locations = true
       |           preferred-locations = [a, b]
-      |           connection-mode = Direct
+      |           connection-mode = DIRECT
       |        }
       |     }
       |  }
@@ -124,10 +124,10 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     cosmos.db shouldBe "openwhisk"
 
     val policy = cosmos.connectionPolicy.asJava
-    policy.isUsingMultipleWriteLocations shouldBe true
-    policy.getMaxPoolSize shouldBe 42
-    policy.getConnectionMode shouldBe ConnectionMode.Direct
-    policy.getPreferredLocations.asScala.toSeq should contain only ("a", "b")
-    policy.getRetryOptions.getMaxRetryWaitTimeInSeconds shouldBe 120
+    policy.usingMultipleWriteLocations shouldBe true
+    policy.maxPoolSize shouldBe 42
+    policy.connectionMode shouldBe ConnectionMode.DIRECT
+    policy.preferredLocations.asScala.toSeq should contain only ("a", "b")
+    policy.retryOptions.maxRetryWaitTimeInSeconds shouldBe 120
   }
 }

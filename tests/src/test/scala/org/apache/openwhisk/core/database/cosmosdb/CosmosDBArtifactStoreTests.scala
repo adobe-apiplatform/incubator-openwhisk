@@ -42,6 +42,7 @@ import org.apache.openwhisk.core.entity.{
 import org.junit.runner.RunWith
 import org.scalatest.FlatSpec
 import org.scalatest.junit.JUnitRunner
+import scala.collection.JavaConverters._
 import spray.json.JsString
 
 import scala.concurrent.duration._
@@ -83,10 +84,12 @@ class CosmosDBArtifactStoreTests extends FlatSpec with CosmosDBStoreBehaviorBase
     stores.foreach { s =>
       val doc = s.asInstanceOf[CosmosDBArtifactStore[_]].documentCollection()
       val offer = client
-        .queryOffers(s"SELECT * from c where c.offerResourceId = '${doc.getResourceId}'", null)
-        .blockingOnlyResult()
-        .get
-      withClue(s"Collection ${doc.getId} : ") {
+        .queryOffers(s"SELECT * from c where c.offerResourceId = '${doc.resourceId}'", null)
+        .blockFirst()
+        .results()
+        .asScala
+        .head
+      withClue(s"Collection ${doc.id()} : ") {
         offer.getThroughput shouldBe storeConfig.throughput
       }
     }

@@ -17,13 +17,14 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.microsoft.azure.cosmosdb.{Database, SqlParameter, SqlParameterCollection, SqlQuerySpec}
+import com.azure.data.cosmos.internal.Database
+import com.azure.data.cosmos.{SqlParameter, SqlParameterList, SqlQuerySpec}
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike}
 import pureconfig._
 import pureconfig.generic.auto._
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.database.test.behavior.ArtifactStoreTestUtil.storeAvailable
-
+import scala.collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
 import scala.util.{Random, Try}
 
@@ -48,14 +49,14 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
   protected def createTestDB() = {
     if (useExistingDB) {
       val db = getOrCreateDatabase()
-      println(s"Using existing database ${db.getId}")
+      println(s"Using existing database ${db.id()}")
       db
     } else {
       val databaseDefinition = new Database
-      databaseDefinition.setId(generateDBName())
-      val db = client.createDatabase(databaseDefinition, null).blockingResult()
+      databaseDefinition.id(generateDBName())
+      val db = client.createDatabase(databaseDefinition, null).blockFirst().getResource
       dbsToDelete += db
-      println(s"Created database ${db.getId}")
+      println(s"Created database ${db.id()}")
       db
     }
   }
@@ -63,25 +64,28 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
   private def getOrCreateDatabase(): Database = {
     client
       .queryDatabases(querySpec(storeConfig.db), null)
-      .blockingOnlyResult()
+      .blockFirst()
+      .results()
+      .asScala
+      .headOption
       .getOrElse {
-        client.createDatabase(newDatabase, null).blockingResult()
+        client.createDatabase(newDatabase, null).blockFirst().getResource
       }
   }
 
   protected def querySpec(id: String) =
-    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", new SqlParameterCollection(new SqlParameter("@id", id)))
+    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", new SqlParameterList(new SqlParameter("@id", id)))
 
   private def newDatabase = {
     val databaseDefinition = new Database
-    databaseDefinition.setId(storeConfig.db)
+    databaseDefinition.id(storeConfig.db)
     databaseDefinition
   }
 
   override def afterAll(): Unit = {
     super.afterAll()
     if (!useExistingDB) {
-      dbsToDelete.foreach(db => client.deleteDatabase(db.getSelfLink, null).blockingResult())
+      dbsToDelete.foreach(db => client.deleteDatabase(db.selfLink, null).blockFirst().getResource)
     }
     client.close()
   }

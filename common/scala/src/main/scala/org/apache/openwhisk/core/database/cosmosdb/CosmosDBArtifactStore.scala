@@ -17,16 +17,15 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import _root_.rx.RxReactiveStreams
 import akka.actor.ActorSystem
 import akka.event.Logging.InfoLevel
 import akka.http.scaladsl.model.{ContentType, StatusCodes, Uri}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
-import com.microsoft.azure.cosmosdb._
-import com.microsoft.azure.cosmosdb.internal.Constants.Properties
-import com.microsoft.azure.cosmosdb.rx.AsyncDocumentClient
+import com.azure.data.cosmos.{AccessCondition, CosmosClientException, FeedOptions, PartitionKey, Resource}
+import com.azure.data.cosmos.internal.Constants.Properties
+import com.azure.data.cosmos.internal._
 import kamon.metric.MeasurementUnit
 import org.apache.openwhisk.common.{LogMarkerToken, Logging, LoggingMarkers, MetricEmitter, Scheduler, TransactionId}
 import org.apache.openwhisk.core.database.StoreUtils._
@@ -102,20 +101,20 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     val asJson = d.toDocumentRecord
 
     val (doc, docSize) = toCosmosDoc(asJson)
-    val id = doc.getId
-    val docinfoStr = s"id: $id, rev: ${doc.getETag}"
+    val id = doc.id()
+    val docinfoStr = s"id: $id, rev: ${doc.etag}"
     val start = transid.started(this, LoggingMarkers.DATABASE_SAVE, s"[PUT] '$collName' saving document: '$docinfoStr'")
 
     val o = if (isNewDocument(doc)) {
-      client.createDocument(collection.getSelfLink, doc, newRequestOption(id), true)
+      client.createDocument(collection.selfLink, doc, newRequestOption(id), true)
     } else {
-      client.replaceDocument(doc, matchRevOption(id, doc.getETag))
+      client.replaceDocument(doc, matchRevOption(id, doc.etag))
     }
 
     val f = o
       .head()
       .recoverWith {
-        case e: DocumentClientException if isConflict(e) && isNewDocument(doc) =>
+        case e: CosmosClientException if isConflict(e) && isNewDocument(doc) =>
           val docId = DocId(asJson.fields(_id).convertTo[String])
           //Fetch existing document and check if its deleted
           getRaw(docId).flatMap {
@@ -147,7 +146,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
           collectMetrics(putToken, r.getRequestCharge)
           toDocInfo(r.getResource)
         }, {
-          case e: DocumentClientException if isConflict(e) =>
+          case e: CosmosClientException if isConflict(e) =>
             transid.finished(this, start, s"[PUT] '$collName', document: '$docinfoStr'; conflict.")
             DocumentConflictException("conflict on 'put'")
           case e => e
@@ -169,10 +168,10 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
           transid.finished(this, start, s"[DEL] '$collName' completed document: '$doc'${extraLogs(r)}", InfoLevel)
           true
         }, {
-          case e: DocumentClientException if isNotFound(e) =>
+          case e: CosmosClientException if isNotFound(e) =>
             transid.finished(this, start, s"[DEL] '$collName', document: '$doc'; not found.")
             NoDocumentException("not found on 'delete'")
-          case e: DocumentClientException if isConflict(e) =>
+          case e: CosmosClientException if isConflict(e) =>
             transid.finished(this, start, s"[DEL] '$collName', document: '$doc'; conflict.")
             DocumentConflictException("conflict on 'delete'")
           case e => e
@@ -237,7 +236,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
               deserialize[A, DocumentAbstraction](doc, js)
             }
           }, {
-            case e: DocumentClientException if isNotFound(e) =>
+            case e: CosmosClientException if isNotFound(e) =>
               transid.finished(this, start, s"[GET] '$collName', document: '$doc'; not found.")
               // for compatibility
               throw NoDocumentException("not found on 'get'")
@@ -272,7 +271,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
         }
       }
       .recoverWith {
-        case e: DocumentClientException if isNotFound(e) =>
+        case e: CosmosClientException if isNotFound(e) =>
           transid.finished(this, start, s"[GET_BY_ID] '$collName' completed: '$id' not found")
           Future.successful(None)
       }
@@ -295,7 +294,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
         Some(js)
       }
       .recoverWith {
-        case e: DocumentClientException if isNotFound(e) => Future.successful(None)
+        case e: CosmosClientException if isNotFound(e) => Future.successful(None)
       }
   }
 
@@ -336,20 +335,18 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     val options = newFeedOptions()
     val queryMetrics = scala.collection.mutable.Buffer[QueryMetrics]()
     if (transid.meta.extraLogging) {
-      options.setPopulateQueryMetrics(true)
-      options.setEmitVerboseTracesInQuery(true)
+      options.populateQueryMetrics(true)
+      options.emitVerboseTracesInQuery(true)
     }
 
-    def collectQueryMetrics(r: FeedResponse[Document]): Unit = {
-      collectMetrics(queryToken, r.getRequestCharge)
-      queryMetrics.appendAll(r.getQueryMetrics.values().asScala)
-    }
+//    def collectQueryMetrics(r: FeedResponse[Document]): Unit = {
+//      collectMetrics(queryToken, r.requestCharge())
+//      queryMetrics.appendAll(r.queryMetrics.values().asScala)
+//    }
 
-    val publisher =
-      RxReactiveStreams.toPublisher(client.queryDocuments(collection.getSelfLink, querySpec, options))
     val f = Source
-      .fromPublisher(publisher)
-      .wireTap(collectQueryMetrics(_))
+      .fromPublisher(client.queryDocuments(collection.selfLink, querySpec, options))
+      // .wireTap(collectQueryMetrics(_))
       .mapConcat(asVector)
       .drop(skip)
       .map(queryResultToWhiskJsonDoc)
@@ -368,9 +365,9 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
           val combinedMetrics = QueryMetrics.ZERO.add(queryMetrics.toSeq: _*)
           logging.debug(
             this,
-            s"[QueryMetricsEnabled] Collection [$collName] - Query [${querySpec.getQueryText}].\nQueryMetrics\n[$combinedMetrics]")
+            s"[QueryMetricsEnabled] Collection [$collName] - Query [${querySpec.queryText}].\nQueryMetrics\n[$combinedMetrics]")
         }
-        val stats = viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.getParameters, queryResult)
+        val stats = viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.parameters, queryResult)
         val statsToLog = stats.map(s => " " + s).getOrElse("")
         transid.finished(
           this,
@@ -394,12 +391,12 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
     //For aggregates the value is in _aggregates fields
     val f = client
-      .queryDocuments(collection.getSelfLink, querySpec, newFeedOptions())
+      .queryDocuments(collection.selfLink, querySpec, newFeedOptions())
       .head()
       .map { r =>
-        val count = r.getResults.asScala.head.getLong(aggregate).longValue
+        val count = r.results.asScala.head.getLong(aggregate).longValue
         transid.finished(this, start, s"[COUNT] '$collName' completed: count $count")
-        collectMetrics(countToken, r.getRequestCharge)
+        collectMetrics(countToken, r.requestCharge)
         if (count > skip) count - skip else 0L
       }
 
@@ -456,7 +453,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     val opts = new RequestOptions
     opts.setPopulateQuotaInfo(true)
     client
-      .readCollection(collection.getSelfLink, opts)
+      .readCollection(collection.selfLink, opts)
       .head()
       .map(rr => CollectionResourceUsage(rr.getResponseHeaders.asScala.toMap))
   }
@@ -476,27 +473,29 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     }
   }
 
-  private def isNotFound[A <: DocumentAbstraction](e: DocumentClientException) =
-    e.getStatusCode == StatusCodes.NotFound.intValue
+  private def isNotFound[A <: DocumentAbstraction](e: CosmosClientException) =
+    e.statusCode == StatusCodes.NotFound.intValue
 
-  private def isConflict(e: DocumentClientException) = {
-    e.getStatusCode == StatusCodes.Conflict.intValue || e.getStatusCode == StatusCodes.PreconditionFailed.intValue
+  private def isConflict(e: CosmosClientException) = {
+    e.statusCode == StatusCodes.Conflict.intValue || e.statusCode == StatusCodes.PreconditionFailed.intValue
   }
 
   private def toCosmosDoc(json: JsObject): (Document, Int) = {
     val computedJs = documentHandler.computedFields(json)
     val computedOpt = if (computedJs.fields.nonEmpty) Some(computedJs) else None
+    val docId = escapeId(json.fields(_id).convertTo[String])
     val fieldsToAdd =
       Seq(
-        (cid, Some(JsString(escapeId(json.fields(_id).convertTo[String])))),
+        (cid, Some(JsString(docId))),
         (etag, json.fields.get(_rev)),
         (computed, computedOpt),
-        (clusterId, clusterIdValue))
+        (clusterId, clusterIdValue),
+        (selfLink, Some(JsString(createSelfLink(docId)))))
     val fieldsToRemove = Seq(_id, _rev)
     val mapped = transform(json, fieldsToAdd, fieldsToRemove)
     val jsonString = mapped.compactPrint
     val doc = new Document(jsonString)
-    doc.set(selfLink, createSelfLink(doc.getId))
+    //doc.set(selfLink, createSelfLink(doc.getId))
     doc.setTimeToLive(null) //Disable any TTL if in effect for earlier revision
     (doc, jsonString.length)
   }
@@ -513,25 +512,25 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     checkDoc(doc)
     val jsString = doc.toJson
     val js = jsString.parseJson.asJsObject
-    val whiskDoc = toWhiskJsonDoc(js, doc.getId, Some(JsString(doc.getETag)))
+    val whiskDoc = toWhiskJsonDoc(js, doc.id, Some(JsString(doc.etag)))
     (whiskDoc, jsString.length)
   }
 
   private def toDocInfo[T <: Resource](doc: T) = {
     checkDoc(doc)
-    DocInfo(DocId(unescapeId(doc.getId)), DocRevision(doc.getETag))
+    DocInfo(DocId(unescapeId(doc.id)), DocRevision(doc.etag))
   }
 
   private def selfLinkOf(id: DocId) = createSelfLink(escapeId(id.id))
 
-  private def createSelfLink(id: String) = s"dbs/${database.getId}/colls/${collection.getId}/docs/$id"
+  private def createSelfLink(id: String) = s"dbs/${database.id()}/colls/${collection.id()}/docs/$id"
 
   private def matchRevOption(info: DocInfo): RequestOptions = matchRevOption(escapeId(info.id.id), info.rev.rev)
 
   private def matchRevOption(id: String, etag: String): RequestOptions = {
     val options = newRequestOption(id)
     val condition = new AccessCondition
-    condition.setCondition(etag)
+    condition.condition(etag)
     options.setAccessCondition(condition)
     options
   }
@@ -547,13 +546,13 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   private def newFeedOptions() = {
     val options = new FeedOptions()
-    options.setEnableCrossPartitionQuery(true)
+    options.enableCrossPartitionQuery(true)
     options
   }
 
   private def checkDoc[T <: Resource](doc: T): Unit = {
-    require(doc.getId != null, s"$doc does not have id field set")
-    require(doc.getETag != null, s"$doc does not have etag field set")
+    require(doc.id != null, s"$doc does not have id field set")
+    require(doc.etag != null, s"$doc does not have etag field set")
   }
 
   private def collectMetrics(token: LogMarkerToken, charge: Double): Unit = {
@@ -585,11 +584,11 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   private def isSoftDeleted(js: JsObject) = js.fields.get(deleted).contains(JsTrue)
 
-  private def isNewDocument(doc: Document) = doc.getETag == null
+  private def isNewDocument(doc: Document) = doc.etag == null
 
   private def extraLogs(r: ResourceResponse[_])(implicit tid: TransactionId): String = {
     if (tid.meta.extraLogging) {
-      " " + r.getRequestDiagnosticsString
+      " " + r.getCosmosResponseDiagnosticString
     } else ""
   }
 }

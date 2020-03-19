@@ -75,7 +75,7 @@ class CacheInvalidatorTests
     implicit val tid = TransactionId.testing
     implicit val docReader: DocumentReader = WhiskDocumentReader
     implicit val format = WhiskEntityJsonFormat
-    dbName = createTestDB().getId
+    dbName = createTestDB().id()
     val dbConfig = storeConfig.copy(db = dbName)
     val store = CosmosDBArtifactStoreProvider.makeArtifactStore[WhiskEntity](dbConfig, None)
     val pkg = WhiskPackage(EntityPath("cacheInvalidationTest"), EntityName(randomString()))

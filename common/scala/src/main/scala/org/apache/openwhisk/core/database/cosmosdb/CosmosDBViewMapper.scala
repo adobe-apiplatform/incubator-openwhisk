@@ -19,9 +19,10 @@ package org.apache.openwhisk.core.database.cosmosdb
 
 import java.util.Collections
 
-import com.microsoft.azure.cosmosdb.DataType.{Number, String}
-import com.microsoft.azure.cosmosdb.IndexKind.Range
-import com.microsoft.azure.cosmosdb.{PartitionKeyDefinition, SqlParameter, SqlParameterCollection, SqlQuerySpec}
+import com.azure.data.cosmos.{PartitionKeyDefinition, SqlParameter, SqlParameterList, SqlQuerySpec}
+import com.azure.data.cosmos.IndexKind.RANGE
+import com.azure.data.cosmos.DataType.STRING
+import com.azure.data.cosmos.DataType.NUMBER
 import kamon.metric.MeasurementUnit
 import org.apache.openwhisk.common.{LogMarkerToken, TransactionId, WhiskInstants}
 import org.apache.openwhisk.core.database.ActivationHandler.NS_PATH
@@ -61,7 +62,7 @@ private[cosmosdb] trait CosmosDBViewMapper {
 
   val partitionKeyDefn: PartitionKeyDefinition = {
     val defn = new PartitionKeyDefinition
-    defn.setPaths(Collections.singletonList("/id"))
+    defn.paths(Collections.singletonList("/id"))
     defn
   }
 
@@ -72,7 +73,7 @@ private[cosmosdb] trait CosmosDBViewMapper {
   }
 
   protected def prepareSpec(query: String, params: List[(String, Any)]): SqlQuerySpec = {
-    val paramColl = new SqlParameterCollection
+    val paramColl = new SqlParameterList
     params.foreach { case (k, v) => paramColl.add(new SqlParameter(k, v)) }
 
     new SqlQuerySpec(query, paramColl)
@@ -86,7 +87,7 @@ private[cosmosdb] trait CosmosDBViewMapper {
   def recordQueryStats(ddoc: String,
                        viewName: String,
                        descending: Boolean,
-                       queryParams: SqlParameterCollection,
+                       queryParams: SqlParameterList,
                        result: List[JsObject]): Option[String] = None
 }
 
@@ -153,10 +154,10 @@ private[cosmosdb] object WhisksViewMapper extends SimpleMapper {
   override def indexingPolicy: IndexingPolicy =
     IndexingPolicy(
       includedPaths = Set(
-        IncludedPath(s"/$TYPE/?", Index(Range, String, -1)),
-        IncludedPath(s"/$NS/?", Index(Range, String, -1)),
-        IncludedPath(s"/$computed/$ROOT_NS/?", Index(Range, String, -1)),
-        IncludedPath(s"/$UPDATED/?", Index(Range, Number, -1))))
+        IncludedPath(s"/$TYPE/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$NS/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$computed/$ROOT_NS/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$UPDATED/?", Index(RANGE, NUMBER, -1))))
 
   override protected def where(ddoc: String,
                                view: String,
@@ -211,10 +212,10 @@ private[cosmosdb] object ActivationViewMapper extends SimpleMapper with WhiskIns
   override def indexingPolicy: IndexingPolicy =
     IndexingPolicy(
       includedPaths = Set(
-        IncludedPath(s"/$NS/?", Index(Range, String, -1)),
-        IncludedPath(s"/$computed/$NS_PATH/?", Index(Range, String, -1)),
-        IncludedPath(s"/$START/?", Index(Range, Number, -1)),
-        IncludedPath(s"/$deleted/?", Index(Range, Number, -1))))
+        IncludedPath(s"/$NS/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$computed/$NS_PATH/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$START/?", Index(RANGE, NUMBER, -1)),
+        IncludedPath(s"/$deleted/?", Index(RANGE, NUMBER, -1))))
 
   override protected def where(ddoc: String,
                                view: String,
@@ -259,7 +260,7 @@ private[cosmosdb] object ActivationViewMapper extends SimpleMapper with WhiskIns
   override def recordQueryStats(ddoc: String,
                                 viewName: String,
                                 descending: Boolean,
-                                queryParams: SqlParameterCollection,
+                                queryParams: SqlParameterList,
                                 result: List[JsObject]): Option[String] = {
     val stat = if (viewName == "activations" && descending) {
       // Collect stats for the delta between
@@ -307,12 +308,12 @@ private[cosmosdb] object SubjectViewMapper extends CosmosDBViewMapper {
     //and keys are bigger
     IndexingPolicy(
       includedPaths = Set(
-        IncludedPath(s"/$UUID/?", Index(Range, String, -1)),
-        IncludedPath(s"/$NSS/[]/$NAME/?", Index(Range, String, -1)),
-        IncludedPath(s"/$SUBJECT/?", Index(Range, String, -1)),
-        IncludedPath(s"/$NSS/[]/$UUID/?", Index(Range, String, -1)),
-        IncludedPath(s"/$CONCURRENT_INVOCATIONS/?", Index(Range, Number, -1)),
-        IncludedPath(s"/$INVOCATIONS_PER_MIN/?", Index(Range, Number, -1))))
+        IncludedPath(s"/$UUID/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$NSS/[]/$NAME/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$SUBJECT/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$NSS/[]/$UUID/?", Index(RANGE, STRING, -1)),
+        IncludedPath(s"/$CONCURRENT_INVOCATIONS/?", Index(RANGE, NUMBER, -1)),
+        IncludedPath(s"/$INVOCATIONS_PER_MIN/?", Index(RANGE, NUMBER, -1))))
 
   override def prepareQuery(ddoc: String,
                             view: String,
@@ -375,9 +376,9 @@ private[cosmosdb] object SubjectViewMapper extends CosmosDBViewMapper {
 
 object CosmosDBViewMapper {
 
-  def paramValue[T](params: SqlParameterCollection, key: String, clazz: Class[T]): Option[T] = {
+  def paramValue[T](params: SqlParameterList, key: String, clazz: Class[T]): Option[T] = {
     val name = "@" + key
-    params.iterator().asScala.find(_.getName == name).map(_.getValue(clazz).asInstanceOf[T])
+    params.iterator().asScala.find(_.name == name).map(_.value(clazz).asInstanceOf[T])
   }
 
   def createStatsToken(viewName: String, statName: String, collName: String): LogMarkerToken = {

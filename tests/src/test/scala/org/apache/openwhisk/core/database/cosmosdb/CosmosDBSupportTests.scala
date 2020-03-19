@@ -18,10 +18,9 @@
 package org.apache.openwhisk.core.database.cosmosdb
 
 import akka.stream.ActorMaterializer
-import com.microsoft.azure.cosmosdb.IndexKind.Range
-import com.microsoft.azure.cosmosdb.DataType.String
-import com.microsoft.azure.cosmosdb.DocumentCollection
-import com.microsoft.azure.cosmosdb.rx.AsyncDocumentClient
+import com.azure.data.cosmos.internal.{AsyncDocumentClient, DocumentCollection}
+import com.azure.data.cosmos.IndexKind.RANGE
+import com.azure.data.cosmos.DataType.STRING
 import com.typesafe.config.ConfigFactory
 import common.{StreamLogging, WskActorSystem}
 import org.apache.openwhisk.core.entity.{
@@ -54,7 +53,7 @@ class CosmosDBSupportTests
 
   it should "create and update index" in {
     val testDb = createTestDB()
-    val config: CosmosDBConfig = storeConfig.copy(db = testDb.getId)
+    val config: CosmosDBConfig = storeConfig.copy(db = testDb.id())
 
     val indexedPaths1 = Set("/foo/?", "/bar/?")
     val (_, coll) = new CosmosTest(config, client, newMapper(indexedPaths1)).initialize()
@@ -78,7 +77,7 @@ class CosmosDBSupportTests
     cosmosDBConfig.timeToLive shouldBe Some(60.seconds)
 
     val testDb = createTestDB()
-    val testConfig = cosmosDBConfig.copy(db = testDb.getId)
+    val testConfig = cosmosDBConfig.copy(db = testDb.id())
     val coll = CosmosDBArtifactStoreProvider.makeArtifactStore[WhiskActivation](testConfig, None).collection
     coll.getDefaultTimeToLive shouldBe 60.seconds.toSeconds
   }
@@ -113,10 +112,10 @@ class CosmosDBSupportTests
   }
 
   private def indexedPaths(coll: DocumentCollection) =
-    coll.getIndexingPolicy.getIncludedPaths.asScala.map(_.getPath).toList
+    coll.getIndexingPolicy.includedPaths.asScala.map(_.path).toList
 
   protected def newTestIndexingPolicy(paths: Set[String]): IndexingPolicy =
-    IndexingPolicy(includedPaths = paths.map(p => IncludedPath(p, Index(Range, String, -1))))
+    IndexingPolicy(includedPaths = paths.map(p => IncludedPath(p, Index(RANGE, STRING, -1))))
 
   private class CosmosTest(override val config: CosmosDBConfig,
                            override val client: AsyncDocumentClient,

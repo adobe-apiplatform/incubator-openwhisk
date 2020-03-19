@@ -21,7 +21,7 @@ import java.io.Closeable
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import com.microsoft.azure.cosmosdb.rx.AsyncDocumentClient
+import com.azure.data.cosmos.internal.AsyncDocumentClient
 import com.typesafe.config.ConfigFactory
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.core.ConfigKeys

@@ -17,8 +17,8 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.microsoft.azure.cosmosdb.DataType.String
-import com.microsoft.azure.cosmosdb.IndexKind.Range
+import com.azure.data.cosmos.DataType.STRING
+import com.azure.data.cosmos.IndexKind.RANGE
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
@@ -29,7 +29,7 @@ class IndexingPolicyTests extends FlatSpec with Matchers {
 
   it should "match same instance" in {
     val policy =
-      IndexingPolicy(includedPaths = Set(IncludedPath("foo", Index(Range, String, -1))))
+      IndexingPolicy(includedPaths = Set(IncludedPath("foo", Index(RANGE, STRING, -1))))
     IndexingPolicy.isSame(policy, policy) shouldBe true
   }
 
@@ -37,13 +37,13 @@ class IndexingPolicyTests extends FlatSpec with Matchers {
     val policy =
       IndexingPolicy(
         includedPaths =
-          Set(IncludedPath("foo", Index(Range, String, -1)), IncludedPath("bar", Index(Range, String, -1))))
+          Set(IncludedPath("foo", Index(RANGE, STRING, -1)), IncludedPath("bar", Index(RANGE, STRING, -1))))
 
     val policy2 =
       IndexingPolicy(
         includedPaths = Set(
-          IncludedPath("foo2", Index(Range, String, -1)),
-          IncludedPath("bar", Set(Index(Range, String, -1), Index(Range, String, -1)))))
+          IncludedPath("foo2", Index(RANGE, STRING, -1)),
+          IncludedPath("bar", Set(Index(RANGE, STRING, -1), Index(RANGE, STRING, -1)))))
 
     IndexingPolicy.isSame(policy, policy2) shouldBe false
   }
@@ -52,8 +52,8 @@ class IndexingPolicyTests extends FlatSpec with Matchers {
     val policy =
       IndexingPolicy(
         includedPaths = Set(
-          IncludedPath("foo", Index(Range, String, -1)),
-          IncludedPath("bar", Set(Index(Range, String, -1), Index(Range, String, -1)))))
+          IncludedPath("foo", Index(RANGE, STRING, -1)),
+          IncludedPath("bar", Set(Index(RANGE, STRING, -1), Index(RANGE, STRING, -1)))))
 
     val jpolicy = policy.asJava()
     val policy2 = IndexingPolicy(jpolicy)
