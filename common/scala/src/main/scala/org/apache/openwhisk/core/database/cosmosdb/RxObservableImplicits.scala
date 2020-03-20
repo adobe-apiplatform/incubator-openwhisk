@@ -22,7 +22,6 @@ import java.util.function.Consumer
 import com.azure.data.cosmos.{FeedResponse, Resource}
 import com.azure.data.cosmos.internal.ResourceResponse
 import reactor.core.publisher.Flux
-import rx.Observable
 
 import scala.collection.JavaConverters._
 import scala.concurrent.{Future, Promise}
