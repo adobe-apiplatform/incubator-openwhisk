@@ -269,6 +269,6 @@ object ConfigKeys {
   val apacheClientConfig = "whisk.apache-client"
 
   val parameterStorage = "whisk.parameter-storage"
-  
+
   val azBlob = "whisk.azure-blob"
 }
