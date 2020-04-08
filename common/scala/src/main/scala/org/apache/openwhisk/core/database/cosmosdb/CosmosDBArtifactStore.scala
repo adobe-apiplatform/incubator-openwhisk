@@ -23,9 +23,17 @@ import akka.http.scaladsl.model.{ContentType, StatusCodes, Uri}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
-import com.azure.data.cosmos.{AccessCondition, CosmosClientException, FeedOptions, PartitionKey, Resource}
-import com.azure.data.cosmos.internal.Constants.Properties
-import com.azure.data.cosmos.internal._
+import com.azure.cosmos.CosmosClientException
+import com.azure.cosmos.implementation.Constants.Properties
+import com.azure.cosmos.implementation.{
+  AsyncDocumentClient,
+  Document,
+  DocumentCollection,
+  QueryMetrics,
+  RequestOptions,
+  ResourceResponse
+}
+import com.azure.cosmos.models.{AccessCondition, FeedOptions, FeedResponse, ModelBridgeInternal, PartitionKey, Resource}
 import kamon.metric.MeasurementUnit
 import org.apache.openwhisk.common.{LogMarkerToken, Logging, LoggingMarkers, MetricEmitter, Scheduler, TransactionId}
 import org.apache.openwhisk.core.database.StoreUtils._
@@ -101,14 +109,15 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     val asJson = d.toDocumentRecord
 
     val (doc, docSize) = toCosmosDoc(asJson)
-    val id = doc.id()
-    val docinfoStr = s"id: $id, rev: ${doc.etag}"
+    val id = doc.getId()
+    val docinfoStr = s"id: $id, rev: ${doc.getETag}"
     val start = transid.started(this, LoggingMarkers.DATABASE_SAVE, s"[PUT] '$collName' saving document: '$docinfoStr'")
 
     val o = if (isNewDocument(doc)) {
-      client.createDocument(collection.selfLink, doc, newRequestOption(id), true)
+      client.createDocument(collection.getSelfLink, doc, newRequestOption(id), true)
     } else {
-      client.replaceDocument(doc, matchRevOption(id, doc.etag))
+      RetryOptions
+      client.replaceDocument(doc, matchRevOption(id, doc.getETag))
     }
 
     val f = o
@@ -335,8 +344,8 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     val options = newFeedOptions()
     val queryMetrics = scala.collection.mutable.Buffer[QueryMetrics]()
     if (transid.meta.extraLogging) {
-      options.populateQueryMetrics(true)
-      options.emitVerboseTracesInQuery(true)
+      options.setPopulateQueryMetrics(true)
+      options.setEmitVerboseTracesInQuery(true)
     }
 
     def collectQueryMetrics(r: FeedResponse[Document]): Unit = {
@@ -345,8 +354,8 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     }
 
     val f = Source
-      .fromPublisher(client.queryDocuments(collection.selfLink, querySpec, options))
-      // .wireTap(collectQueryMetrics(_))
+      .fromPublisher(client.queryDocuments(collection.getSelfLink, querySpec, options))
+      .wireTap(collectQueryMetrics(_))
       .mapConcat(asVector)
       .drop(skip)
       .map(queryResultToWhiskJsonDoc)
@@ -365,9 +374,9 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
           val combinedMetrics = QueryMetrics.ZERO.add(queryMetrics.toSeq: _*)
           logging.debug(
             this,
-            s"[QueryMetricsEnabled] Collection [$collName] - Query [${querySpec.queryText}].\nQueryMetrics\n[$combinedMetrics]")
+            s"[QueryMetricsEnabled] Collection [$collName] - Query [${querySpec.getQueryText}].\nQueryMetrics\n[$combinedMetrics]")
         }
-        val stats = viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.parameters, queryResult)
+        val stats = viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.getParameters, queryResult)
         val statsToLog = stats.map(s => " " + s).getOrElse("")
         transid.finished(
           this,
@@ -391,12 +400,14 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
     //For aggregates the value is in _aggregates fields
     val f = client
-      .queryDocuments(collection.selfLink, querySpec, newFeedOptions())
+      .queryDocuments(collection.getSelfLink, querySpec, newFeedOptions())
       .head()
       .map { r =>
-        val count = r.results.asScala.head.getLong(aggregate).longValue
+        val res = r.getResults.asScala
+        println(s"results: ${res.size} ${res.head}")
+        val count = res.head.getLong(aggregate).longValue
         transid.finished(this, start, s"[COUNT] '$collName' completed: count $count")
-        collectMetrics(countToken, r.requestCharge)
+        collectMetrics(countToken, r.getRequestCharge)
         if (count > skip) count - skip else 0L
       }
 
@@ -453,7 +464,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     val opts = new RequestOptions
     opts.setPopulateQuotaInfo(true)
     client
-      .readCollection(collection.selfLink, opts)
+      .readCollection(collection.getSelfLink, opts)
       .head()
       .map(rr => CollectionResourceUsage(rr.getResponseHeaders.asScala.toMap))
   }
@@ -474,10 +485,10 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
   }
 
   private def isNotFound[A <: DocumentAbstraction](e: CosmosClientException) =
-    e.statusCode == StatusCodes.NotFound.intValue
+    e.getStatusCode == StatusCodes.NotFound.intValue
 
   private def isConflict(e: CosmosClientException) = {
-    e.statusCode == StatusCodes.Conflict.intValue || e.statusCode == StatusCodes.PreconditionFailed.intValue
+    e.getStatusCode == StatusCodes.Conflict.intValue || e.getStatusCode == StatusCodes.PreconditionFailed.intValue
   }
 
   private def toCosmosDoc(json: JsObject): (Document, Int) = {
@@ -512,25 +523,25 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     checkDoc(doc)
     val jsString = doc.toJson
     val js = jsString.parseJson.asJsObject
-    val whiskDoc = toWhiskJsonDoc(js, doc.id, Some(JsString(doc.etag)))
+    val whiskDoc = toWhiskJsonDoc(js, doc.getId, Some(JsString(doc.getETag)))
     (whiskDoc, jsString.length)
   }
 
   private def toDocInfo[T <: Resource](doc: T) = {
     checkDoc(doc)
-    DocInfo(DocId(unescapeId(doc.id)), DocRevision(doc.etag))
+    DocInfo(DocId(unescapeId(doc.getId)), DocRevision(doc.getETag))
   }
 
   private def selfLinkOf(id: DocId) = createSelfLink(escapeId(id.id))
 
-  private def createSelfLink(id: String) = s"dbs/${database.id()}/colls/${collection.id()}/docs/$id"
+  private def createSelfLink(id: String) = s"dbs/${database.getId()}/colls/${collection.getId()}/docs/$id"
 
   private def matchRevOption(info: DocInfo): RequestOptions = matchRevOption(escapeId(info.id.id), info.rev.rev)
 
   private def matchRevOption(id: String, etag: String): RequestOptions = {
     val options = newRequestOption(id)
     val condition = new AccessCondition
-    condition.condition(etag)
+    condition.setCondition(etag)
     options.setAccessCondition(condition)
     options
   }
@@ -546,13 +557,13 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   private def newFeedOptions() = {
     val options = new FeedOptions()
-    options.enableCrossPartitionQuery(true)
+//    options.enableCrossPartitionQuery(true)
     options
   }
 
   private def checkDoc[T <: Resource](doc: T): Unit = {
-    require(doc.id != null, s"$doc does not have id field set")
-    require(doc.etag != null, s"$doc does not have etag field set")
+    require(doc.getId != null, s"$doc does not have id field set")
+    require(doc.getETag != null, s"$doc does not have etag field set")
   }
 
   private def collectMetrics(token: LogMarkerToken, charge: Double): Unit = {
@@ -584,7 +595,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   private def isSoftDeleted(js: JsObject) = js.fields.get(deleted).contains(JsTrue)
 
-  private def isNewDocument(doc: Document) = doc.etag == null
+  private def isNewDocument(doc: Document) = doc.getETag == null
 
   private def extraLogs(r: ResourceResponse[_])(implicit tid: TransactionId): String = {
     if (tid.meta.extraLogging) {

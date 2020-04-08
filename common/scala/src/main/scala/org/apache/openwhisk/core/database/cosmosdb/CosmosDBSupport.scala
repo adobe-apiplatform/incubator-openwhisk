@@ -17,8 +17,10 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.data.cosmos.internal.{AsyncDocumentClient, Database, DocumentCollection, RequestOptions}
-import com.azure.data.cosmos.{FeedResponse, Resource, SqlParameter, SqlParameterList, SqlQuerySpec}
+import com.azure.cosmos.implementation.{AsyncDocumentClient, Database, DocumentCollection, RequestOptions}
+import com.azure.cosmos.models.{FeedResponse, Resource, SqlParameter, SqlParameterList, SqlQuerySpec}
+//import com.azure.data.cosmos.internal.AsyncDocumentClient
+//import com.azure.data.cosmos.Resource
 import org.apache.openwhisk.common.Logging
 
 import scala.collection.JavaConverters._
@@ -39,13 +41,13 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
       .queryDatabases(querySpec(config.db), null)
       .blockingOnlyResult()
       .getOrElse {
-        client.createDatabase(newDatabase, null).blockingResult()
+        client.createDatabase(newDatabase, null).block().getResource
       }
   }
 
   private def getOrCreateCollection(database: Database)(implicit logging: Logging) = {
     client
-      .queryCollections(database.selfLink, querySpec(collName), null)
+      .queryCollections(database.getSelfLink, querySpec(collName), null)
       .blockingOnlyResult()
       .map { coll =>
         val expectedIndexingPolicy = viewMapper.indexingPolicy
@@ -60,13 +62,13 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
         coll
       }
       .getOrElse {
-        client.createCollection(database.selfLink, newDatabaseCollection, dbOptions).blockFirst().getResource
+        client.createCollection(database.getSelfLink, newDatabaseCollection, dbOptions).block().getResource
       }
   }
 
   private def newDatabaseCollection = {
     val defn = new DocumentCollection
-    defn.id(collName)
+    defn.setId(collName)
     defn.setIndexingPolicy(viewMapper.indexingPolicy.asJava())
     defn.setPartitionKey(viewMapper.partitionKeyDefn)
     val ttl = config.timeToLive.map(_.toSeconds.toInt).getOrElse(-1)
@@ -82,7 +84,7 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
 
   private def newDatabase = {
     val databaseDefinition = new Database
-    databaseDefinition.id(config.db)
+    databaseDefinition.setId(config.db)
     databaseDefinition
   }
 
@@ -92,5 +94,5 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
   protected def querySpec(id: String) =
     new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", new SqlParameterList(new SqlParameter("@id", id)))
 
-  protected def asVector[T <: Resource](r: FeedResponse[T]): Vector[T] = r.results.asScala.toVector
+  protected def asVector[T <: Resource](r: FeedResponse[T]): Vector[T] = r.getResults.asScala.toVector
 }

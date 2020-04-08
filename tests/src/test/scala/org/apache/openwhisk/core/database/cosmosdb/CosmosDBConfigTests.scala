@@ -51,11 +51,11 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     policy.getRequestTimeout.toMillis shouldBe defaultPolicy.getRequestTimeout.toMillis
     policy.isUsingMultipleWriteLocations shouldBe defaultPolicy.isUsingMultipleWriteLocations
 
-    val retryOpts = policy.retryOptions
-    val defaultOpts = defaultPolicy.retryOptions
+    val retryOpts = policy.getThrottlingRetryOptions
+    val defaultOpts = defaultPolicy.getThrottlingRetryOptions
 
-    retryOpts.maxRetryAttemptsOnThrottledRequests shouldBe defaultOpts.maxRetryAttemptsOnThrottledRequests
-    retryOpts.maxRetryWaitTimeInSeconds shouldBe defaultOpts.maxRetryWaitTimeInSeconds
+    retryOpts.getMaxRetryAttemptsOnThrottledRequests shouldBe defaultOpts.getMaxRetryAttemptsOnThrottledRequests
+    retryOpts.getMaxRetryWaitTime.getSeconds shouldBe defaultOpts.getMaxRetryWaitTime.getSeconds
   }
 
   it should "work with generic config" in {
@@ -90,10 +90,10 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
 
     cosmos.connectionPolicy.maxPoolSize shouldBe 42
     val policy = cosmos.connectionPolicy.asJava
-    val defaultPolicy = JConnectionPolicy.defaultPolicy()
-    policy.connectionMode shouldBe defaultPolicy.connectionMode
-    policy.retryOptions.maxRetryAttemptsOnThrottledRequests shouldBe defaultPolicy.retryOptions.maxRetryAttemptsOnThrottledRequests
-    policy.retryOptions.maxRetryWaitTimeInSeconds shouldBe defaultPolicy.retryOptions.maxRetryWaitTimeInSeconds
+    val defaultPolicy = JConnectionPolicy.getDefaultPolicy
+    policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
+    policy.getThrottlingRetryOptions.getMaxRetryAttemptsOnThrottledRequests shouldBe defaultPolicy.getThrottlingRetryOptions.getMaxRetryAttemptsOnThrottledRequests
+    policy.getThrottlingRetryOptions.getMaxRetryWaitTime.getSeconds shouldBe defaultPolicy.getThrottlingRetryOptions.getMaxRetryWaitTime.getSeconds
   }
 
   it should "work with specific extended config" in {
@@ -125,10 +125,10 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     cosmos.db shouldBe "openwhisk"
 
     val policy = cosmos.connectionPolicy.asJava
-    policy.usingMultipleWriteLocations shouldBe true
-    policy.maxPoolSize shouldBe 42
-    policy.connectionMode shouldBe ConnectionMode.DIRECT
-    policy.preferredLocations.asScala.toSeq should contain only ("a", "b")
-    policy.retryOptions.maxRetryWaitTimeInSeconds shouldBe 120
+    policy.isUsingMultipleWriteLocations shouldBe true
+    policy.getMaxPoolSize shouldBe 42
+    policy.getConnectionMode shouldBe ConnectionMode.DIRECT
+    policy.getPreferredLocations.asScala.toSeq should contain only ("a", "b")
+    policy.getThrottlingRetryOptions.getMaxRetryWaitTime.getSeconds shouldBe 120
   }
 }

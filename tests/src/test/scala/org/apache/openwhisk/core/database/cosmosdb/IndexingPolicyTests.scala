@@ -17,8 +17,8 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.data.cosmos.DataType.STRING
-import com.azure.data.cosmos.IndexKind.RANGE
+import com.azure.cosmos.models.IndexKind.RANGE
+import com.azure.cosmos.models.DataType.STRING
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}

@@ -17,13 +17,14 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.data.cosmos.internal.Database
-import com.azure.data.cosmos.{SqlParameter, SqlParameterList, SqlQuerySpec}
+import com.azure.cosmos.implementation.Database
+import com.azure.cosmos.models.{SqlParameter, SqlParameterList, SqlQuerySpec}
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike}
 import pureconfig._
 import pureconfig.generic.auto._
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.database.test.behavior.ArtifactStoreTestUtil.storeAvailable
+
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
 import scala.util.{Random, Try}
@@ -49,14 +50,14 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
   protected def createTestDB() = {
     if (useExistingDB) {
       val db = getOrCreateDatabase()
-      println(s"Using existing database ${db.id()}")
+      println(s"Using existing database ${db.getId()}")
       db
     } else {
       val databaseDefinition = new Database
-      databaseDefinition.id(generateDBName())
-      val db = client.createDatabase(databaseDefinition, null).blockFirst().getResource
+      databaseDefinition.setId(generateDBName())
+      val db = client.createDatabase(databaseDefinition, null).block().getResource
       dbsToDelete += db
-      println(s"Created database ${db.id()}")
+      println(s"Created database ${db.getId()}")
       db
     }
   }
@@ -65,11 +66,11 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
     client
       .queryDatabases(querySpec(storeConfig.db), null)
       .blockFirst()
-      .results()
+      .getResults()
       .asScala
       .headOption
       .getOrElse {
-        client.createDatabase(newDatabase, null).blockFirst().getResource
+        client.createDatabase(newDatabase, null).block().getResource
       }
   }
 
@@ -78,14 +79,14 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
 
   private def newDatabase = {
     val databaseDefinition = new Database
-    databaseDefinition.id(storeConfig.db)
+    databaseDefinition.setId(storeConfig.db)
     databaseDefinition
   }
 
   override def afterAll(): Unit = {
     super.afterAll()
     if (!useExistingDB) {
-      dbsToDelete.foreach(db => client.deleteDatabase(db.selfLink, null).blockFirst().getResource)
+      dbsToDelete.foreach(db => client.deleteDatabase(db.getSelfLink, null).block().getResource)
     }
     client.close()
   }

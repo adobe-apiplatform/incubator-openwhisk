@@ -19,8 +19,9 @@ package org.apache.openwhisk.core.database.cosmosdb
 
 import java.util.function.Consumer
 
-import com.azure.data.cosmos.{FeedResponse, Resource}
-import com.azure.data.cosmos.internal.ResourceResponse
+import com.azure.cosmos.implementation.ResourceResponse
+import com.azure.cosmos.models.{FeedResponse, Resource}
+import reactor.core.publisher.Mono
 import reactor.core.publisher.Flux
 
 import scala.collection.JavaConverters._
@@ -28,7 +29,7 @@ import scala.concurrent.{Future, Promise}
 
 private[cosmosdb] trait RxObservableImplicits {
 
-  implicit class RxScalaObservable[T](observable: Flux[T]) {
+  implicit class RxScalaObservableFlux[T](observable: Flux[T]) {
 
     /**
      * Returns the head of the [[Flux]] in a [[scala.concurrent.Future]].
@@ -38,20 +39,37 @@ private[cosmosdb] trait RxObservableImplicits {
     def head(): Future[T] = {
       def toHandler[P](f: (P) => Unit): Consumer[P] = (t: P) => f(t)
       val promise = Promise[T]()
-      observable.single.subscribe(toHandler(promise.success), toHandler(promise.failure))
+      observable.subscribe(toHandler(promise.success), toHandler(promise.failure))
       promise.future
     }
   }
+  implicit class RxScalaObservableMono[T](observable: Mono[T]) {
 
+    /**
+     * Returns the head of the [[Flux]] in a [[scala.concurrent.Future]].
+     *
+     * @return the head result of the [[Flux]].
+     */
+    def head(): Future[T] = {
+      def toHandler[P](f: (P) => Unit): Consumer[P] = (t: P) => f(t)
+      val promise = Promise[T]()
+      observable.subscribe(toHandler(promise.success), toHandler(promise.failure))
+      promise.future
+    }
+  }
   implicit class RxScalaResourceObservable[T <: Resource](observable: Flux[ResourceResponse[T]]) {
     def blockingResult(): T = observable.blockFirst().getResource
   }
 
   implicit class RxScalaFeedObservable[T <: Resource](observable: Flux[FeedResponse[T]]) {
     def blockingOnlyResult(): Option[T] = {
-      val results = observable.blockLast().results().asScala
+      val results = observable.blockLast().getResults.asScala
       require(results.isEmpty || results.size == 1, s"More than one result found $results")
       results.headOption
+
+//      val results = observable.blockLast().results().asScala
+//      require(results.isEmpty || results.size == 1, s"More than one result found $results")
+//      results.headOption
     }
   }
 }

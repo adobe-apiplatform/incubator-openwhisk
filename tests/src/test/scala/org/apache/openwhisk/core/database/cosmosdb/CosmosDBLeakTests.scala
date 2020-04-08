@@ -16,7 +16,7 @@
  */
 
 package org.apache.openwhisk.core.database.cosmosdb
-import akka.stream.scaladsl.{Sink, Source}
+//import akka.stream.scaladsl.{Sink, Source}
 import io.netty.util.ResourceLeakDetector
 import io.netty.util.ResourceLeakDetector.Level
 import org.apache.openwhisk.common.TransactionId
@@ -63,25 +63,30 @@ class CosmosDBLeakTests extends FlatSpec with CosmosDBStoreBehaviorBase {
     }
   }
 
-  it should "not happen in performing subject query" ignore {
+  it should "not happen in performing subject query" in {
     implicit val tid: TransactionId = transid()
     val uuid = UUID()
     val ak = BasicAuthenticationAuthKey(uuid, Secret())
     val ns = Namespace(aname(), uuid)
     val subs =
       Array(WhiskAuth(Subject(), Set(WhiskNamespace(ns, ak))))
-    subs foreach (put(authStore, _))
+    subs foreach { s =>
+      println(s"adding subject ${s}")
+      put(authStore, s)
+    }
+    println("done adding subject")
 
     implicit val patienceConfig: PatienceConfig = PatienceConfig(timeout = 30.minutes)
 
-    Source(1 to 500)
-      .filter(_ => RecordingLeakDetectorFactory.counter.cur == 0)
-      .mapAsync(5) { i =>
-        if (i % 5 == 0) println(i)
-        queryName(ns)
-      }
-      .runWith(Sink.ignore)
-      .futureValue
+//    Source(1 to 500)
+//      .filter(_ => RecordingLeakDetectorFactory.counter.cur == 0)
+//      .mapAsync(5) { i =>
+//        if (i % 5 == 0) println(i)
+//        println(s"query ${ns}")
+//        queryName(ns)
+//      }
+//      .runWith(Sink.ignore)
+//      .futureValue
 
     System.gc()
 

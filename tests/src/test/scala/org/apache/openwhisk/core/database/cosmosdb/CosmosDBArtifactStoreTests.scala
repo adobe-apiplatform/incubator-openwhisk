@@ -84,12 +84,12 @@ class CosmosDBArtifactStoreTests extends FlatSpec with CosmosDBStoreBehaviorBase
     stores.foreach { s =>
       val doc = s.asInstanceOf[CosmosDBArtifactStore[_]].documentCollection()
       val offer = client
-        .queryOffers(s"SELECT * from c where c.offerResourceId = '${doc.resourceId}'", null)
+        .queryOffers(s"SELECT * from c where c.offerResourceId = '${doc.getResourceId}'", null)
         .blockFirst()
-        .results()
+        .getResults
         .asScala
         .head
-      withClue(s"Collection ${doc.id()} : ") {
+      withClue(s"Collection ${doc.getId()} : ") {
         offer.getThroughput shouldBe storeConfig.throughput
       }
     }

@@ -19,10 +19,11 @@ package org.apache.openwhisk.core.database.cosmosdb
 
 import java.util.Collections
 
-import com.azure.data.cosmos.{PartitionKeyDefinition, SqlParameter, SqlParameterList, SqlQuerySpec}
-import com.azure.data.cosmos.IndexKind.RANGE
-import com.azure.data.cosmos.DataType.STRING
-import com.azure.data.cosmos.DataType.NUMBER
+import com.azure.cosmos.models.{PartitionKeyDefinition, SqlParameter, SqlParameterList, SqlQuerySpec}
+//import com.azure.data.cosmos.{PartitionKeyDefinition, SqlParameter, SqlParameterList, SqlQuerySpec}
+import com.azure.cosmos.models.IndexKind.RANGE
+import com.azure.cosmos.models.DataType.STRING
+import com.azure.cosmos.models.DataType.NUMBER
 import kamon.metric.MeasurementUnit
 import org.apache.openwhisk.common.{LogMarkerToken, TransactionId, WhiskInstants}
 import org.apache.openwhisk.core.database.ActivationHandler.NS_PATH
@@ -62,7 +63,7 @@ private[cosmosdb] trait CosmosDBViewMapper {
 
   val partitionKeyDefn: PartitionKeyDefinition = {
     val defn = new PartitionKeyDefinition
-    defn.paths(Collections.singletonList("/id"))
+    defn.setPaths(Collections.singletonList("/id"))
     defn
   }
 
@@ -378,7 +379,7 @@ object CosmosDBViewMapper {
 
   def paramValue[T](params: SqlParameterList, key: String, clazz: Class[T]): Option[T] = {
     val name = "@" + key
-    params.iterator().asScala.find(_.name == name).map(_.value(clazz).asInstanceOf[T])
+    params.iterator().asScala.find(_.getName == name).map(_.getValue(clazz).asInstanceOf[T])
   }
 
   def createStatsToken(viewName: String, statName: String, collName: String): LogMarkerToken = {

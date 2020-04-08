@@ -21,7 +21,7 @@ import akka.event.slf4j.SLF4JLogging
 import ch.qos.logback.classic.LoggerContext
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
-import com.azure.data.cosmos.internal.ResourceThrottleRetryPolicy
+import com.azure.cosmos.implementation.ResourceThrottleRetryPolicy
 import org.apache.openwhisk.common.{Counter => WhiskCounter}
 import kamon.metric.{Counter, MeasurementUnit}
 import org.apache.openwhisk.common.{LogMarkerToken, TransactionId}

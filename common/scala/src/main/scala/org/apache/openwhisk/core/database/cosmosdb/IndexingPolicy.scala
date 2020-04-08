@@ -17,7 +17,7 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.data.cosmos.{
+import com.azure.cosmos.models.{
   DataType,
   HashIndex,
   IndexKind,
@@ -27,6 +27,7 @@ import com.azure.data.cosmos.{
   Index => JIndex,
   IndexingPolicy => JIndexingPolicy
 }
+//import com.azure.data.cosmos.{DataType, HashIndex, IndexKind, RangeIndex, ExcludedPath => JExcludedPath, IncludedPath => JIncludedPath, Index => JIndex, IndexingPolicy => JIndexingPolicy}
 
 import scala.collection.JavaConverters._
 
@@ -45,7 +46,7 @@ case class IndexingPolicy(includedPaths: Set[IncludedPath],
   def asJava(): JIndexingPolicy = {
     val policy = new JIndexingPolicy()
     policy.setIncludedPaths(includedPaths.toList.map(_.asJava()).asJava)
-    policy.excludedPaths(excludedPaths.toList.map(_.asJava()).asJava)
+    policy.setExcludedPaths(excludedPaths.toList.map(_.asJava()).asJava)
     policy
   }
 }
@@ -53,8 +54,8 @@ case class IndexingPolicy(includedPaths: Set[IncludedPath],
 object IndexingPolicy {
   def apply(policy: JIndexingPolicy): IndexingPolicy =
     IndexingPolicy(
-      policy.includedPaths.asScala.map(IncludedPath(_)).toSet,
-      policy.excludedPaths.asScala.map(ExcludedPath(_)).toSet)
+      policy.getIncludedPaths.asScala.map(IncludedPath(_)).toSet,
+      policy.getExcludedPaths.asScala.map(ExcludedPath(_)).toSet)
 
   /**
    * IndexingPolicy fetched from CosmosDB contains extra entries. So need to check
@@ -74,14 +75,14 @@ object IndexingPolicy {
 case class IncludedPath(path: String, indexes: Set[Index]) {
   def asJava(): JIncludedPath = {
     val includedPath = new JIncludedPath()
-    includedPath.indexes(indexes.map(_.asJava()).asJava)
-    includedPath.path(path)
+    includedPath.setIndexes(indexes.map(_.asJava()).asJava)
+    includedPath.setPath(path)
     includedPath
   }
 }
 
 object IncludedPath {
-  def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.path, ip.indexes.asScala.map(Index(_)).toSet)
+  def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.getPath, ip.getIndexes.asScala.map(Index(_)).toSet)
 
   def apply(path: String, index: Index): IncludedPath = IncludedPath(path, Set(index))
 }
@@ -89,27 +90,27 @@ object IncludedPath {
 case class ExcludedPath(path: String) {
   def asJava(): JExcludedPath = {
     val excludedPath = new JExcludedPath()
-    excludedPath.path(path)
+    excludedPath.setPath(path)
     excludedPath
   }
 }
 
 object ExcludedPath {
-  def apply(ep: JExcludedPath): ExcludedPath = ExcludedPath(ep.path)
+  def apply(ep: JExcludedPath): ExcludedPath = ExcludedPath(ep.getPath)
 }
 
 case class Index(kind: IndexKind, dataType: DataType, precision: Int) {
   def asJava(): JIndex = kind match {
-    case IndexKind.HASH  => JIndex.Hash(dataType, precision)
-    case IndexKind.RANGE => JIndex.Range(dataType, precision)
+    case IndexKind.HASH  => JIndex.hash(dataType, precision)
+    case IndexKind.RANGE => JIndex.range(dataType, precision)
     case _               => throw new RuntimeException(s"Unsupported kind $kind")
   }
 }
 
 object Index {
   def apply(index: JIndex): Index = index match {
-    case i: HashIndex  => Index(i.kind, i.dataType, i.precision)
-    case i: RangeIndex => Index(i.kind, i.dataType, i.precision)
+    case i: HashIndex  => Index(i.getKind, i.getDataType, i.getPrecision)
+    case i: RangeIndex => Index(i.getKind, i.getDataType, i.getPrecision)
     case _             => throw new RuntimeException(s"Unsupported kind $index")
   }
 }

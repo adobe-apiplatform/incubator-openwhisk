@@ -17,7 +17,7 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.data.cosmos.internal.Constants.Properties.{AGGREGATE, E_TAG, ID, SELF_LINK}
+import com.azure.cosmos.implementation.Constants.Properties.{E_TAG, ID, SELF_LINK}
 import org.apache.openwhisk.core.database.cosmosdb.CosmosDBConstants._
 import org.apache.openwhisk.core.database.StoreUtils.transform
 import spray.json.{JsObject, JsString}
@@ -35,7 +35,7 @@ private[cosmosdb] object CosmosDBConstants {
 
   val etag: String = E_TAG
 
-  val aggregate: String = AGGREGATE
+  val aggregate: String = "_value"
 
   val selfLink: String = SELF_LINK
 

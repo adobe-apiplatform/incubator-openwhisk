@@ -16,13 +16,15 @@
  */
 
 package org.apache.openwhisk.core.database.cosmosdb
-import com.azure.data.cosmos.{
+import com.azure.cosmos.{
   ConnectionMode,
   ConsistencyLevel,
   ConnectionPolicy => JConnectionPolicy,
-  RetryOptions => JRetryOptions
+  ThrottlingRetryOptions => JRetryOptions
 }
-import com.azure.data.cosmos.internal.AsyncDocumentClient
+import com.azure.cosmos.implementation.AsyncDocumentClient
+//import com.azure.data.cosmos.{ConnectionMode, ConsistencyLevel, ConnectionPolicy => JConnectionPolicy, RetryOptions => JRetryOptions}
+//import com.azure.data.cosmos.internal.AsyncDocumentClient
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigUtil.joinPath
 import org.apache.openwhisk.core.ConfigKeys
@@ -60,11 +62,11 @@ case class ConnectionPolicy(maxPoolSize: Int,
                             connectionMode: ConnectionMode) {
   def asJava: JConnectionPolicy = {
     val p = new JConnectionPolicy
-    p.maxPoolSize(maxPoolSize)
-    p.usingMultipleWriteLocations(usingMultipleWriteLocations)
-    p.preferredLocations(preferredLocations.asJava)
-    p.retryOptions(retryOptions.asJava)
-    p.connectionMode(connectionMode)
+    p.setMaxPoolSize(maxPoolSize)
+    p.setUsingMultipleWriteLocations(usingMultipleWriteLocations)
+    p.setPreferredLocations(preferredLocations.asJava)
+    p.setThrottlingRetryOptions(retryOptions.asJava)
+    p.setConnectionMode(connectionMode)
     p
   }
 }
@@ -72,8 +74,8 @@ case class ConnectionPolicy(maxPoolSize: Int,
 case class RetryOptions(maxRetryAttemptsOnThrottledRequests: Int, maxRetryWaitTime: Duration) {
   def asJava: JRetryOptions = {
     val o = new JRetryOptions
-    o.maxRetryAttemptsOnThrottledRequests(maxRetryAttemptsOnThrottledRequests)
-    o.maxRetryWaitTimeInSeconds(maxRetryWaitTime.toSeconds.toInt)
+    o.setMaxRetryAttemptsOnThrottledRequests(maxRetryAttemptsOnThrottledRequests)
+    o.setMaxRetryWaitTime(java.time.Duration.ofNanos(maxRetryWaitTime.toNanos))
     o
   }
 }

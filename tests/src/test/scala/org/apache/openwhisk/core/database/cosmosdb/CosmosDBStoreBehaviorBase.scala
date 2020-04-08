@@ -37,7 +37,7 @@ trait CosmosDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase 
 
   override lazy val storeAvailableCheck: Try[Any] = storeConfigTry
 
-  protected lazy val config: CosmosDBConfig = adaptCosmosDBConfig(storeConfig.copy(db = createTestDB().id()))
+  protected lazy val config: CosmosDBConfig = adaptCosmosDBConfig(storeConfig.copy(db = createTestDB().getId))
 
   override lazy val authStore = {
     implicit val docReader: DocumentReader = WhiskDocumentReader
