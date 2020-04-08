@@ -20,7 +20,7 @@ import com.typesafe.config.ConfigFactory
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
-import com.azure.data.cosmos.{ConnectionMode, ConnectionPolicy => JConnectionPolicy}
+import com.azure.cosmos.{ConnectionMode, ConnectionPolicy => JConnectionPolicy}
 
 import scala.collection.JavaConverters._
 
@@ -41,14 +41,15 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
 
     //Cosmos SDK does not have equals defined so match them explicitly
     val policy = cosmos.connectionPolicy.asJava
-    val defaultPolicy = JConnectionPolicy.defaultPolicy()
-    policy.connectionMode shouldBe defaultPolicy.connectionMode
-    policy.enableEndpointDiscovery shouldBe defaultPolicy.enableEndpointDiscovery
-    policy.idleConnectionTimeoutInMillis shouldBe defaultPolicy.idleConnectionTimeoutInMillis
-    policy.maxPoolSize shouldBe defaultPolicy.maxPoolSize
-    policy.preferredLocations shouldBe defaultPolicy.preferredLocations
-    policy.requestTimeoutInMillis shouldBe defaultPolicy.requestTimeoutInMillis
-    policy.usingMultipleWriteLocations shouldBe defaultPolicy.usingMultipleWriteLocations
+
+    val defaultPolicy = JConnectionPolicy.getDefaultPolicy()
+    policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
+    policy.isEndpointDiscoveryEnabled shouldBe defaultPolicy.isEndpointDiscoveryEnabled
+    policy.getIdleConnectionTimeout.toMillis shouldBe defaultPolicy.getIdleConnectionTimeout.toMillis
+    policy.getMaxPoolSize shouldBe defaultPolicy.getMaxPoolSize
+    policy.getPreferredLocations shouldBe defaultPolicy.getPreferredLocations
+    policy.getRequestTimeout.toMillis shouldBe defaultPolicy.getRequestTimeout.toMillis
+    policy.isUsingMultipleWriteLocations shouldBe defaultPolicy.isUsingMultipleWriteLocations
 
     val retryOpts = policy.retryOptions
     val defaultOpts = defaultPolicy.retryOptions

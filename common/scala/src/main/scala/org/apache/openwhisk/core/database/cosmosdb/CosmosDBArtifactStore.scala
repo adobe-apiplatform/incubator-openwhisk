@@ -339,10 +339,10 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
       options.emitVerboseTracesInQuery(true)
     }
 
-//    def collectQueryMetrics(r: FeedResponse[Document]): Unit = {
-//      collectMetrics(queryToken, r.requestCharge())
-//      queryMetrics.appendAll(r.queryMetrics.values().asScala)
-//    }
+    def collectQueryMetrics(r: FeedResponse[Document]): Unit = {
+      collectMetrics(queryToken, r.getRequestCharge())
+      queryMetrics.appendAll(ModelBridgeInternal.queryMetrics(r).values().asScala)
+    }
 
     val f = Source
       .fromPublisher(client.queryDocuments(collection.selfLink, querySpec, options))
