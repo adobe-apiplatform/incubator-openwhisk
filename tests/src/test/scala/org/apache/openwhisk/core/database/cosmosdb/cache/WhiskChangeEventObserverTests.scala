@@ -16,7 +16,7 @@
  */
 
 package org.apache.openwhisk.core.database.cosmosdb.cache
-import com.azure.data.cosmos.CosmosItemProperties
+import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 import common.StreamLogging
 import org.apache.openwhisk.core.database.CacheInvalidationMessage
 import org.apache.openwhisk.core.entity.CacheKey
@@ -68,10 +68,11 @@ class WhiskChangeEventObserverTests extends FlatSpec with Matchers with StreamLo
       CacheInvalidationMessage(CacheKey("baz"), instanceId))
   }
 
-  private def createDoc(id: String, clusterId: Option[String] = None): CosmosItemProperties = {
+  val objectMapper = new ObjectMapper()
+  private def createDoc(id: String, clusterId: Option[String] = None): JsonNode = {
     val cdoc = CosmosDBDoc(id, clusterId)
     val json = CosmosDBDoc.seredes.write(cdoc).compactPrint
-    new CosmosItemProperties(json)
+    objectMapper.readTree(json)
   }
 
   case class CosmosDBDoc(id: String, _clusterId: Option[String], _lsn: Int = 42)

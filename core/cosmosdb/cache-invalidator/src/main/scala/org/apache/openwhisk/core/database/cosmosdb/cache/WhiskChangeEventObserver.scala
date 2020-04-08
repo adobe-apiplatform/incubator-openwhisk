@@ -18,8 +18,9 @@
 package org.apache.openwhisk.core.database.cosmosdb.cache
 
 import akka.Done
-import com.azure.data.cosmos.CosmosItemProperties
-import com.azure.data.cosmos.internal.changefeed.ChangeFeedObserverContext
+import com.azure.cosmos.implementation.Constants
+import com.azure.cosmos.implementation.changefeed.ChangeFeedObserverContext
+import com.fasterxml.jackson.databind.JsonNode
 import com.google.common.base.Throwables
 import kamon.metric.MeasurementUnit
 import org.apache.openwhisk.common.{LogMarkerToken, Logging, MetricEmitter}
@@ -38,7 +39,7 @@ class WhiskChangeEventObserver(config: InvalidatorConfig, eventProducer: EventPr
     extends ChangeFeedObserver {
   import WhiskChangeEventObserver._
 
-  override def process(context: ChangeFeedObserverContext, docs: Seq[CosmosItemProperties]): Future[Done] = {
+  override def process(context: ChangeFeedObserverContext, docs: Seq[JsonNode]): Future[Done] = {
     //Each observer is called from a pool managed by CosmosDB ChangeFeedProcessor
     //So its fine to have a blocking wait. If this fails then batch would be reread and
     //retried thus ensuring at-least-once semantics
@@ -66,8 +67,8 @@ object WhiskChangeEventObserver {
   /**
    * Records the current lag on per partition basis. In ideal cases the lag should not continue to increase
    */
-  def recordLag(context: ChangeFeedObserverContext, lastDoc: CosmosItemProperties): Unit = {
-    val sessionToken = context.getFeedResponse.sessionToken()
+  def recordLag(context: ChangeFeedObserverContext, lastDoc: JsonNode): Unit = {
+    val sessionToken = context.getFeedResponse.getSessionToken
     val lsnRef = lastDoc.get("_lsn")
     require(lsnRef != null, s"Non lsn defined in document $lastDoc")
 
@@ -94,10 +95,10 @@ object WhiskChangeEventObserver {
     lsn.toLong
   }
 
-  def processDocs(docs: Seq[CosmosItemProperties], config: InvalidatorConfig)(implicit log: Logging): Seq[String] = {
+  def processDocs(docs: Seq[JsonNode], config: InvalidatorConfig)(implicit log: Logging): Seq[String] = {
     docs
       .filter { doc =>
-        val cid = Option(doc.getString(CosmosDBConstants.clusterId))
+        val cid = Option(getString(doc, CosmosDBConstants.clusterId))
         val currentCid = config.clusterId
 
         //only if current clusterId is configured do a check
@@ -107,11 +108,15 @@ object WhiskChangeEventObserver {
         }
       }
       .map { doc =>
-        val id = unescapeId(doc.id())
+        val id = unescapeId(getString(doc, Constants.Properties.ID))
         log.info(this, s"Changed doc [$id]")
         val event = CacheInvalidationMessage(CacheKey(id), instanceId)
         event.serialize
       }
   }
+
+  def getString(jsonNode: JsonNode, propertyName: String): String =
+    if (jsonNode.has(propertyName)) jsonNode.get(propertyName).asText
+    else null
 
 }

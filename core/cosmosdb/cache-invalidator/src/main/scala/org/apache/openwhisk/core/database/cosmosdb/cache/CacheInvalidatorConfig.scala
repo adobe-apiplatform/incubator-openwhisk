@@ -17,7 +17,7 @@
 
 package org.apache.openwhisk.core.database.cosmosdb.cache
 
-import com.azure.data.cosmos.{ConnectionMode, ConsistencyLevel}
+import com.azure.cosmos.{ConnectionMode, ConsistencyLevel}
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigUtil.joinPath
 import pureconfig._
