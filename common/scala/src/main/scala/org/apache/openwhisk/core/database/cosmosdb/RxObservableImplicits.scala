@@ -66,10 +66,6 @@ private[cosmosdb] trait RxObservableImplicits {
       val results = observable.blockLast().getResults.asScala
       require(results.isEmpty || results.size == 1, s"More than one result found $results")
       results.headOption
-
-//      val results = observable.blockLast().results().asScala
-//      require(results.isEmpty || results.size == 1, s"More than one result found $results")
-//      results.headOption
     }
   }
 }
