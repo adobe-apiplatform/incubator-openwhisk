@@ -187,9 +187,9 @@ class InvokerReactive(
   private val collectLogs = new LogStoreCollector(logsProvider)
 
   /** Stores an activation in the database. */
-  private val store = (tid: TransactionId, activation: WhiskActivation, context: UserContext) => {
+  private val store = (tid: TransactionId, activation: WhiskActivation, isBlocking: Boolean, context: UserContext) => {
     implicit val transid: TransactionId = tid
-    activationStore.storeAfterCheck(activation, context)(tid, notifier = None)
+    activationStore.storeAfterCheck(activation, isBlocking, None, context)(tid, notifier = None, logging)
   }
 
   /** Creates a ContainerProxy Actor when being called. */
@@ -274,7 +274,7 @@ class InvokerReactive(
                   msg.user.namespace.uuid,
                   CombinedCompletionAndResultMessage(transid, activation, instance))
 
-                store(msg.transid, activation, UserContext(msg.user))
+                store(msg.transid, activation, msg.blocking, UserContext(msg.user))
                 Future.successful(())
             }
         } else {
@@ -340,4 +340,5 @@ class InvokerReactive(
       case Failure(t) => logging.error(this, s"failed to ping the controller: $t")
     }
   })
+
 }
