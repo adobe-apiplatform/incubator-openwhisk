@@ -32,7 +32,7 @@ import akka.io.Tcp.CommandFailed
 import akka.io.Tcp.Connect
 import akka.io.Tcp.Connected
 import akka.pattern.pipe
-import pureconfig._
+import pureconfig.loadConfigOrThrow
 import pureconfig.generic.auto._
 import akka.stream.ActorMaterializer
 import java.net.InetSocketAddress
@@ -274,6 +274,7 @@ class ContainerProxy(factory: (TransactionId,
   var activeCount = 0;
   var healthPingActor: Option[ActorRef] = None //setup after prewarm starts
   val tcp: ActorRef = testTcp.getOrElse(IO(Tcp)) //allows to testing interaction with Tcp extension
+
   startWith(Uninitialized, NoData())
 
   when(Uninitialized) {
@@ -632,7 +633,6 @@ class ContainerProxy(factory: (TransactionId,
       .flatMap(_ => container.destroy()(TransactionId.invokerNanny))
       .map(_ => ContainerRemoved)
       .pipeTo(self)
-    println("removing")
     goto(Removing) using newData
   }
 

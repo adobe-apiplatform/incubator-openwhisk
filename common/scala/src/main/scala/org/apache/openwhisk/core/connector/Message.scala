@@ -17,7 +17,7 @@
 
 package org.apache.openwhisk.core.connector
 
-import scala.util.{Failure, Success, Try}
+import scala.util.Try
 import spray.json._
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.entity._
@@ -289,6 +289,7 @@ object EventMessageBody extends DefaultJsonProtocol {
 }
 
 case class Activation(name: String,
+                      activationId: String,
                       statusCode: Int,
                       duration: Duration,
                       waitTime: Duration,
@@ -338,6 +339,7 @@ object Activation extends DefaultJsonProtocol {
     jsonFormat(
       Activation.apply _,
       "name",
+      "activationId",
       "statusCode",
       "duration",
       "waitTime",
@@ -354,14 +356,8 @@ object Activation extends DefaultJsonProtocol {
     val statusCode = JsHelpers
       .getFieldPath(result.get.asJsObject, ERROR_FIELD, "statusCode")
       .orElse(JsHelpers.getFieldPath(result.get.asJsObject, "statusCode"))
-
-    statusCode match {
-      case Some(value) =>
-        Try { value.convertTo[BigInt].intValue } match {
-          case Failure(_)    => Some(BadRequest.intValue)
-          case Success(code) => Some(code)
-        }
-      case None => None
+    statusCode.map {
+      case value => Try(value.convertTo[BigInt].intValue).toOption.getOrElse(BadRequest.intValue)
     }
   }
 
@@ -375,6 +371,7 @@ object Activation extends DefaultJsonProtocol {
     } yield {
       Activation(
         fqn,
+        a.activationId.asString,
         a.response.statusCode,
         toDuration(a.duration.getOrElse(0)),
         toDuration(a.annotations.getAs[Long](WhiskActivation.waitTimeAnnotation).getOrElse(0)),
