@@ -238,6 +238,7 @@ class MesosContainerFactory(config: WhiskConfig,
             logging.error(this, s"Mesos framework teardown failed : $t}")
         }
     } else {
+      logging.info(this, "cleaning up invoker tasks on exit...")
       val deleting = mesosData.tasks.map { taskId =>
         //don't wait for kill responses in this case, since it may take longer than allowed to shutdown the container!
         MesosContainerFactory.destroy(mesosClientActor, mesosConfig, mesosData, taskId._1, false)(
