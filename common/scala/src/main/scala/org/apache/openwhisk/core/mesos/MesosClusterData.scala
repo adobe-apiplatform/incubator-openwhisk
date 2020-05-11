@@ -140,9 +140,11 @@ class MesosClusterData(actorSystem: ActorSystem, mesosConfig: MesosConfig, loggi
           completeInit()
         }
       case MemberRemoved(member, _) =>
-        cleaner ! CleanTasks(member.uniqueAddress)
+        logging.warn(this, s"member became removed but may have orphaned tasks ${member}")
+      //cleaner ! CleanTasks(member.uniqueAddress)
       case UnreachableMember(member) =>
-        cleaner ! CleanTasks(member.uniqueAddress)
+        logging.warn(this, s"member became unreachabled but may have orphaned tasks ${member}")
+      //cleaner ! CleanTasks(member.uniqueAddress)
       case m =>
         logging.debug(this, s"unknown message $m")
     }
