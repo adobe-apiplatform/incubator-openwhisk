@@ -469,8 +469,8 @@ object LoggingMarkers {
     LogMarkerToken(invoker, "docker", timeout, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.none)
   def INVOKER_RUNC_CMD(cmd: String) =
     LogMarkerToken(invoker, "runc", start, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.time.milliseconds)
-  def INVOKER_KUBECTL_CMD(cmd: String) =
-    LogMarkerToken(invoker, "kubectl", start, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.none)
+  def INVOKER_KUBEAPI_CMD(cmd: String) =
+    LogMarkerToken(invoker, "kubeapi", start, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.none)
   def INVOKER_MESOS_CMD(cmd: String) =
     LogMarkerToken(invoker, "mesos", start, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.time.milliseconds)
   def INVOKER_MESOS_CMD_TIMEOUT(cmd: String) =
@@ -524,6 +524,12 @@ object LoggingMarkers {
     LogMarkerToken(containerPool, "prewarmSize", counter)(MeasurementUnit.information.megabytes)
   val CONTAINER_POOL_IDLES_COUNT =
     LogMarkerToken(containerPool, "idlesCount", counter)(MeasurementUnit.none)
+  def CONTAINER_POOL_PREWARM_COLDSTART(memory: String, kind: String) =
+    LogMarkerToken(containerPool, "prewarmColdstart", counter, None, Map("memory" -> memory, "kind" -> kind))(
+      MeasurementUnit.none)
+  def CONTAINER_POOL_PREWARM_EXPIRED(memory: String, kind: String) =
+    LogMarkerToken(containerPool, "prewarmExpired", counter, None, Map("memory" -> memory, "kind" -> kind))(
+      MeasurementUnit.none)
   val CONTAINER_POOL_IDLES_SIZE =
     LogMarkerToken(containerPool, "idlesSize", counter)(MeasurementUnit.information.megabytes)
 

@@ -21,30 +21,48 @@ import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets.UTF_8
 
 import io.fabric8.kubernetes.api.builder.Predicate
-import io.fabric8.kubernetes.api.model.{ContainerBuilder, EnvVarBuilder, Pod, PodBuilder, Quantity}
+import io.fabric8.kubernetes.api.model.policy.{PodDisruptionBudget, PodDisruptionBudgetBuilder}
+import io.fabric8.kubernetes.api.model.{
+  ContainerBuilder,
+  EnvVarBuilder,
+  EnvVarSourceBuilder,
+  IntOrString,
+  LabelSelectorBuilder,
+  Pod,
+  PodBuilder,
+  Quantity
+}
 import io.fabric8.kubernetes.client.NamespacedKubernetesClient
-import org.apache.openwhisk.common.{ConfigMapValue, TransactionId}
+import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.entity.ByteSize
 
 import scala.collection.JavaConverters._
 
-class WhiskPodBuilder(client: NamespacedKubernetesClient,
-                      userPodNodeAffinity: KubernetesInvokerNodeAffinity,
-                      podTemplate: Option[ConfigMapValue] = None) {
-  private val template = podTemplate.map(_.value.getBytes(UTF_8))
+class WhiskPodBuilder(client: NamespacedKubernetesClient, config: KubernetesClientConfig) {
+  private val template = config.podTemplate.map(_.value.getBytes(UTF_8))
   private val actionContainerName = "user-action"
   private val actionContainerPredicate: Predicate[ContainerBuilder] = (cb) => cb.getName == actionContainerName
 
-  def affinityEnabled: Boolean = userPodNodeAffinity.enabled
+  def affinityEnabled: Boolean = config.userPodNodeAffinity.enabled
 
-  def buildPodSpec(name: String,
-                   image: String,
-                   memory: ByteSize,
-                   environment: Map[String, String],
-                   labels: Map[String, String])(implicit transid: TransactionId): Pod = {
+  def buildPodSpec(
+    name: String,
+    image: String,
+    memory: ByteSize,
+    environment: Map[String, String],
+    labels: Map[String, String],
+    config: KubernetesClientConfig)(implicit transid: TransactionId): (Pod, Option[PodDisruptionBudget]) = {
     val envVars = environment.map {
       case (key, value) => new EnvVarBuilder().withName(key).withValue(value).build()
-    }.toSeq
+    }.toSeq ++ config.fieldRefEnvironment
+      .map(_.map({
+        case (key, value) =>
+          new EnvVarBuilder()
+            .withName(key)
+            .withValueFrom(new EnvVarSourceBuilder().withNewFieldRef().withFieldPath(value).endFieldRef().build())
+            .build()
+      }).toSeq)
+      .getOrElse(Seq.empty)
 
     val baseBuilder = template match {
       case Some(bytes) =>
@@ -56,12 +74,13 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient,
       .editOrNewMetadata()
       .withName(name)
       .addToLabels("name", name)
+      .addToLabels("user-action-pod", "true")
       .addToLabels(labels.asJava)
       .endMetadata()
 
     val specBuilder = pb1.editOrNewSpec().withRestartPolicy("Always")
 
-    if (userPodNodeAffinity.enabled) {
+    if (config.userPodNodeAffinity.enabled) {
       val affinity = specBuilder
         .editOrNewAffinity()
         .editOrNewNodeAffinity()
@@ -69,9 +88,9 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient,
       affinity
         .addNewNodeSelectorTerm()
         .addNewMatchExpression()
-        .withKey(userPodNodeAffinity.key)
+        .withKey(config.userPodNodeAffinity.key)
         .withOperator("In")
-        .withValues(userPodNodeAffinity.value)
+        .withValues(config.userPodNodeAffinity.value)
         .endMatchExpression()
         .endNodeSelectorTerm()
         .endRequiredDuringSchedulingIgnoredDuringExecution()
@@ -83,11 +102,18 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient,
       specBuilder.editMatchingContainer(actionContainerPredicate)
     } else specBuilder.addNewContainer()
 
+    //if cpu scaling is enabled, calculate cpu from memory, 100m per 256Mi, min is 100m(.1cpu), max is 10000 (10cpu)
+    val cpu = config.cpuScaling
+      .map(cpuConfig => Map("cpu" -> new Quantity(calculateCpu(cpuConfig, memory) + "m")))
+      .getOrElse(Map.empty)
+
     //In container its assumed that env, port, resource limits are set explicitly
     //Here if any value exist in template then that would be overridden
     containerBuilder
       .withNewResources()
-      .withLimits(Map("memory" -> new Quantity(memory.toMB + "Mi")).asJava)
+      //explicitly set requests and limits to same values
+      .withLimits((Map("memory" -> new Quantity(memory.toMB + "Mi")) ++ cpu).asJava)
+      .withRequests((Map("memory" -> new Quantity(memory.toMB + "Mi")) ++ cpu).asJava)
       .endResources()
       .withName("user-action")
       .withImage(image)
@@ -109,7 +135,28 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient,
       .endContainer()
       .endSpec()
       .build()
-    pod
+    val pdb = if (config.pdbEnabled) {
+      Some(
+        new PodDisruptionBudgetBuilder().withNewMetadata
+          .withName(name)
+          .addToLabels(labels.asJava)
+          .endMetadata()
+          .withNewSpec()
+          .withMinAvailable(new IntOrString(1))
+          .withSelector(new LabelSelectorBuilder().withMatchLabels(Map("name" -> name).asJava).build())
+          .and
+          .build)
+    } else {
+      None
+    }
+    (pod, pdb)
+  }
+
+  def calculateCpu(c: KubernetesCpuScalingConfig, memory: ByteSize): Int = {
+    val cpuPerMemorySegment = c.millicpus
+    val cpuMin = c.millicpus
+    val cpuMax = c.maxMillicpus
+    math.min(math.max((memory.toMB / c.memory.toMB) * cpuPerMemorySegment, cpuMin), cpuMax).toInt
   }
 
   private def loadPodSpec(bytes: Array[Byte]): Pod = {

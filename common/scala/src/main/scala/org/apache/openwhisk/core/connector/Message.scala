@@ -21,9 +21,13 @@ import scala.util.Try
 import spray.json._
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.entity._
+
 import scala.concurrent.duration._
+import akka.http.scaladsl.model.StatusCodes._
 import java.util.concurrent.TimeUnit
-import org.apache.openwhisk.core.entity.ActivationResponse.statusForCode
+
+import org.apache.openwhisk.core.entity.ActivationResponse.{statusForCode, ERROR_FIELD}
+import org.apache.openwhisk.utils.JsHelpers
 
 /** Basic trait for messages that are sent on a message bus connector. */
 trait Message {
@@ -285,6 +289,7 @@ object EventMessageBody extends DefaultJsonProtocol {
 }
 
 case class Activation(name: String,
+                      activationId: String,
                       statusCode: Int,
                       duration: Duration,
                       waitTime: Duration,
@@ -293,7 +298,8 @@ case class Activation(name: String,
                       conductor: Boolean,
                       memory: Int,
                       causedBy: Option[String],
-                      size: Option[Int] = None)
+                      size: Option[Int] = None,
+                      userDefinedStatusCode: Option[Int] = None)
     extends EventMessageBody {
   val typeName = Activation.typeName
   override def serialize = toJson.compactPrint
@@ -314,6 +320,7 @@ case class Activation(name: String,
 object Activation extends DefaultJsonProtocol {
 
   val typeName = "Activation"
+
   def parse(msg: String) = Try(activationFormat.read(msg.parseJson))
 
   private implicit val durationFormat = new RootJsonFormat[Duration] {
@@ -332,6 +339,7 @@ object Activation extends DefaultJsonProtocol {
     jsonFormat(
       Activation.apply _,
       "name",
+      "activationId",
       "statusCode",
       "duration",
       "waitTime",
@@ -340,7 +348,18 @@ object Activation extends DefaultJsonProtocol {
       "conductor",
       "memory",
       "causedBy",
-      "size")
+      "size",
+      "userDefinedStatusCode")
+
+  /** Get "StatusCode" from result response set by action developer **/
+  def userDefinedStatusCode(result: Option[JsValue]): Option[Int] = {
+    val statusCode = JsHelpers
+      .getFieldPath(result.get.asJsObject, ERROR_FIELD, "statusCode")
+      .orElse(JsHelpers.getFieldPath(result.get.asJsObject, "statusCode"))
+    statusCode.map {
+      case value => Try(value.convertTo[BigInt].intValue).toOption.getOrElse(BadRequest.intValue)
+    }
+  }
 
   /** Constructs an "Activation" event from a WhiskActivation */
   def from(a: WhiskActivation): Try[Activation] = {
@@ -352,6 +371,7 @@ object Activation extends DefaultJsonProtocol {
     } yield {
       Activation(
         fqn,
+        a.activationId.asString,
         a.response.statusCode,
         toDuration(a.duration.getOrElse(0)),
         toDuration(a.annotations.getAs[Long](WhiskActivation.waitTimeAnnotation).getOrElse(0)),
@@ -363,7 +383,8 @@ object Activation extends DefaultJsonProtocol {
           .map(_.memory.megabytes)
           .getOrElse(0),
         a.annotations.getAs[String](WhiskActivation.causedByAnnotation).toOption,
-        a.response.size)
+        a.response.size,
+        userDefinedStatusCode(a.response.result))
     }
   }
 

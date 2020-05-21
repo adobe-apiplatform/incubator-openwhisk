@@ -45,6 +45,19 @@ whisk {
   }
 }
 ```
+- To rename metrics tags, use the below configuration. Currently, this configuration only applies to the Prometheus
+Metrics. For example, here `namespace` tag name will be replaced by `ow_namespace` in all metrics.
+
+```
+whisk {
+  user-events {
+    rename-tags {
+      # rename/relabel prometheus metrics tags
+      "namespace" = "ow_namespae"
+     }
+  }
+}
+```
 
 Integrations
 ------------
@@ -58,7 +71,7 @@ http://localhost:3000/d/Oew1lvymk/openwhisk-action-performance-metrics
 
 The latest version of the dashboard can be found in the "compose/dashboard/openwhisk_events.json"
 
-[1]: https://github.com/apache/incubator-openwhisk/blob/master/docs/metrics.md#user-specific-metrics
-[2]: https://github.com/apache/incubator-openwhisk-devtools/tree/master/docker-compose
+[1]: https://github.com/apache/openwhisk/blob/master/docs/metrics.md#user-specific-metrics
+[2]: https://github.com/apache/openwhisk-devtools/tree/master/docker-compose
 [3]: https://hub.docker.com/r/prom/prometheus/
 [4]: https://hub.docker.com/r/grafana/grafana/

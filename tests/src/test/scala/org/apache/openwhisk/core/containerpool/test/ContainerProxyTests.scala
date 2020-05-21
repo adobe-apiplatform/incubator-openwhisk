@@ -26,6 +26,7 @@ import akka.testkit.{CallingThreadDispatcher, ImplicitSender, TestKit, TestProbe
 import akka.util.ByteString
 import common.{LoggedFunction, StreamLogging, SynchronizedLoggedFunction, WhiskProperties}
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 import akka.io.Tcp.{Close, CommandFailed, Connect, Connected}
@@ -35,6 +36,7 @@ import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import spray.json.DefaultJsonProtocol._
 import spray.json._
 import org.apache.openwhisk.common.{Logging, TransactionId}
+import org.apache.openwhisk.core.ack.ActiveAck
 import org.apache.openwhisk.core.connector.{
   AcknowledegmentMessage,
   ActivationMessage,
@@ -50,7 +52,7 @@ import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
 import org.apache.openwhisk.core.database.UserContext
-import org.apache.openwhisk.core.invoker.InvokerReactive
+import org.apache.openwhisk.core.invoker.Invoker
 
 import scala.collection.mutable
 import scala.concurrent.Await
@@ -157,7 +159,7 @@ class ContainerProxyTests
 
   /** Expect a NeedWork message with prewarmed data */
   def expectPreWarmed(kind: String) = expectMsgPF() {
-    case NeedWork(PreWarmedData(_, kind, memoryLimit, _)) => true
+    case NeedWork(PreWarmedData(_, kind, memoryLimit, _, _)) => true
   }
 
   /** Expect a NeedWork message with warmed data */
@@ -174,7 +176,7 @@ class ContainerProxyTests
     expectMsg(Transition(machine, Pausing, Paused))
   }
 
-  trait LoggedAcker extends InvokerReactive.ActiveAck {
+  trait LoggedAcker extends ActiveAck {
     def calls =
       mutable.Buffer[(TransactionId, WhiskActivation, Boolean, ControllerInstanceId, UUID, AcknowledegmentMessage)]()
 
@@ -241,8 +243,7 @@ class ContainerProxyTests
       response
   }
 
-  class LoggedCollector(response: Future[ActivationLogs], invokeCallback: () => Unit)
-      extends InvokerReactive.LogsCollector {
+  class LoggedCollector(response: Future[ActivationLogs], invokeCallback: () => Unit) extends Invoker.LogsCollector {
     val collector = LoggedFunction {
       (transid: TransactionId,
        user: Identity,
@@ -265,7 +266,7 @@ class ContainerProxyTests
   }
 
   def createCollector(response: Future[ActivationLogs] = Future.successful(ActivationLogs()),
-                      invokeCallback: () => Unit = () => Unit) =
+                      invokeCallback: () => Unit = () => ()) =
     new LoggedCollector(response, invokeCallback)
 
   def createStore = LoggedFunction {
@@ -276,7 +277,7 @@ class ContainerProxyTests
     (transid: TransactionId, activation: WhiskActivation, isBlockingActivation: Boolean, context: UserContext) =>
       Future.successful(())
   }
-  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false)
+  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, FiniteDuration(1, TimeUnit.MINUTES))
   def healthchecksConfig(enabled: Boolean = false) = ContainerProxyHealthCheckConfig(enabled, 100.milliseconds, 2)
   val filterEnvVar = (k: String) => Character.isUpperCase(k.charAt(0))
 
@@ -605,6 +606,7 @@ class ContainerProxyTests
 
     machine ! Run(noLogsAction, message)
     expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerStarted)
     expectWarmed(invocationNamespace.name, noLogsAction)
     expectMsg(Transition(machine, Running, Ready))
 
@@ -1029,7 +1031,7 @@ class ContainerProxyTests
     registerCallback(machine)
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
-    expectMsg(ContainerRemoved)
+    expectMsg(ContainerRemoved(true))
 
     awaitAssert {
       factory.calls should have size 1
@@ -1075,7 +1077,7 @@ class ContainerProxyTests
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
     expectMsg(ContainerStarted)
-    expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
+    expectMsg(ContainerRemoved(true)) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
     awaitAssert {
@@ -1129,7 +1131,7 @@ class ContainerProxyTests
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
     expectMsg(ContainerStarted)
-    expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
+    expectMsg(ContainerRemoved(true)) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
     awaitAssert {
@@ -1169,7 +1171,7 @@ class ContainerProxyTests
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
     expectMsg(ContainerStarted)
-    expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
+    expectMsg(ContainerRemoved(true)) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
     awaitAssert {
@@ -1208,7 +1210,7 @@ class ContainerProxyTests
     machine ! Run(action, message)
     expectMsg(Transition(machine, Uninitialized, Running))
     expectMsg(ContainerStarted)
-    expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
+    expectMsg(ContainerRemoved(true)) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Running, Removing))
 
     awaitAssert {
@@ -1394,7 +1396,7 @@ class ContainerProxyTests
     preWarm(machine)
 
     //expect failure after healthchecks fail
-    expectMsg(ContainerRemoved)
+    expectMsg(ContainerRemoved(true))
     expectMsg(Transition(machine, Started, Removing))
 
     awaitAssert {
@@ -1434,7 +1436,7 @@ class ContainerProxyTests
     run(machine, Uninitialized)
     timeout(machine) // times out Ready state so container suspends
     expectMsg(Transition(machine, Ready, Pausing))
-    expectMsg(ContainerRemoved) // The message is sent as soon as the container decides to destroy itself
+    expectMsg(ContainerRemoved(true)) // The message is sent as soon as the container decides to destroy itself
     expectMsg(Transition(machine, Pausing, Removing))
 
     awaitAssert {
@@ -1492,7 +1494,7 @@ class ContainerProxyTests
     expectMsg(Transition(machine, Running, Ready))
 
     // Remove the container after the transaction finished
-    expectMsg(ContainerRemoved)
+    expectMsg(ContainerRemoved(true))
     expectMsg(Transition(machine, Ready, Removing))
 
     awaitAssert {
@@ -1724,7 +1726,7 @@ class ContainerProxyTests
       initializeEnv.fields("__OW_TRANSACTION_ID") shouldBe transid.id.toJson
 
       val convertedAuthKey = message.user.authkey.toEnvironment.fields.map(f => ("__OW_" + f._1.toUpperCase(), f._2))
-      val authEnvironment = initializeEnv.fields.filterKeys(convertedAuthKey.contains)
+      val authEnvironment = initializeEnv.fields.filterKeys(convertedAuthKey.contains).toMap
       if (apiKeyMustBePresent) {
         convertedAuthKey shouldBe authEnvironment
       } else {
@@ -1756,7 +1758,7 @@ class ContainerProxyTests
       environment.fields("action_version") shouldBe message.action.version.toJson
       environment.fields("activation_id") shouldBe message.activationId.toJson
       environment.fields("transaction_id") shouldBe transid.id.toJson
-      val authEnvironment = environment.fields.filterKeys(message.user.authkey.toEnvironment.fields.contains)
+      val authEnvironment = environment.fields.filterKeys(message.user.authkey.toEnvironment.fields.contains).toMap
       if (apiKeyMustBePresent) {
         message.user.authkey.toEnvironment shouldBe authEnvironment.toJson.asJsObject
       } else {

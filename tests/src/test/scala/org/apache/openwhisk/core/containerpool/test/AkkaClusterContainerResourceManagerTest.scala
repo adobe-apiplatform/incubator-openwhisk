@@ -34,7 +34,6 @@ import akka.testkit.TestProbe
 import com.typesafe.config.ConfigFactory
 import org.apache.openwhisk.common.AkkaLogging
 import org.apache.openwhisk.core.containerpool.AkkaClusterContainerResourceManager
-import org.apache.openwhisk.core.containerpool.ContainerPoolConfig
 import org.apache.openwhisk.core.containerpool.ContainerResourceManagerConfig
 import org.apache.openwhisk.core.containerpool.Reservation
 import org.apache.openwhisk.core.entity.InvokerInstanceId
@@ -102,7 +101,6 @@ class AkkaClusterContainerResourceManagerTest
   it should "update nodestats async" in {
     val pool = TestProbe().testActor
     implicit val logging = new AkkaLogging(system.log)
-    val poolConfig = ContainerPoolConfig(2.MB, 0.5, false)
     val resourceManagerConfig = ContainerResourceManagerConfig(false, false, 10.seconds, 10)
     val resMgr =
       new AkkaClusterContainerResourceManager(

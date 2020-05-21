@@ -17,16 +17,31 @@
 
 package org.apache.openwhisk.core.containerpool.kubernetes.test
 
-import io.fabric8.kubernetes.api.model.Pod
+import io.fabric8.kubernetes.api.model.policy.PodDisruptionBudgetBuilder
+import io.fabric8.kubernetes.api.model.{
+  EnvVar,
+  EnvVarSource,
+  IntOrString,
+  LabelSelectorBuilder,
+  ObjectFieldSelector,
+  Pod
+}
 import io.fabric8.kubernetes.client.utils.Serialization
 import org.apache.openwhisk.common.{ConfigMapValue, TransactionId}
-import org.apache.openwhisk.core.containerpool.kubernetes.{KubernetesInvokerNodeAffinity, WhiskPodBuilder}
+import org.apache.openwhisk.core.containerpool.kubernetes.{
+  KubernetesClientConfig,
+  KubernetesClientTimeoutConfig,
+  KubernetesCpuScalingConfig,
+  KubernetesInvokerNodeAffinity,
+  WhiskPodBuilder
+}
 import org.apache.openwhisk.core.entity.size._
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
 
 import scala.collection.JavaConverters._
+import scala.concurrent.duration._
 
 @RunWith(classOf[JUnitRunner])
 class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport {
@@ -38,11 +53,72 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
 
   behavior of "WhiskPodBuilder"
 
-  it should "build a new pod" in {
-    val builder = new WhiskPodBuilder(kubeClient, affinity)
-    assertPodSettings(builder)
-  }
+  def config(configMap: Option[ConfigMapValue] = None, affinity: Option[KubernetesInvokerNodeAffinity] = None) =
+    KubernetesClientConfig(
+      KubernetesClientTimeoutConfig(1.seconds, 2.seconds),
+      affinity.getOrElse(KubernetesInvokerNodeAffinity(false, "k", "v")),
+      false,
+      None,
+      configMap,
+      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000)),
+      false,
+      Some(Map("POD_UID" -> "metadata.uid")))
 
+  it should "build a new pod" in {
+    val c = config()
+    val builder = new WhiskPodBuilder(kubeClient, c)
+    assertPodSettings(builder, c)
+  }
+  it should "build set cpu scaled based on memory, if enabled in configuration" in {
+    val config = KubernetesClientConfig(
+      KubernetesClientTimeoutConfig(1.second, 1.second),
+      KubernetesInvokerNodeAffinity(false, "k", "v"),
+      true,
+      None,
+      None,
+      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000)),
+      false,
+      None)
+    val builder = new WhiskPodBuilder(kubeClient, config)
+
+    val (pod, _) = builder.buildPodSpec(name, testImage, 2.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config)
+    withClue(Serialization.asYaml(pod)) {
+      val c = getActionContainer(pod)
+      //min cpu is: config.millicpus
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("300m")
+    }
+
+    val (pod2, _) = builder.buildPodSpec(name, testImage, 15.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config)
+    withClue(Serialization.asYaml(pod2)) {
+      val c = getActionContainer(pod2)
+      //max cpu is: config.maxMillicpus
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("1000m")
+    }
+
+    val (pod3, _) = builder.buildPodSpec(name, testImage, 7.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config)
+    withClue(Serialization.asYaml(pod3)) {
+      val c = getActionContainer(pod3)
+      //scaled cpu is: action mem/config.mem x config.maxMillicpus
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("600m")
+    }
+
+    val config2 = KubernetesClientConfig(
+      KubernetesClientTimeoutConfig(1.second, 1.second),
+      KubernetesInvokerNodeAffinity(false, "k", "v"),
+      true,
+      None,
+      None,
+      None,
+      false,
+      None)
+    val (pod4, _) = builder.buildPodSpec(name, testImage, 7.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config2)
+    withClue(Serialization.asYaml(pod4)) {
+      val c = getActionContainer(pod4)
+      //if scaling config is not provided, no cpu resources are specified
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe None
+    }
+
+  }
   it should "extend existing pod template" in {
     val template = """
        |---
@@ -66,8 +142,9 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
        |      image : "busybox"
        |""".stripMargin
 
-    val builder = new WhiskPodBuilder(kubeClient, affinity.copy(enabled = false), Some(ConfigMapValue(template)))
-    val pod = assertPodSettings(builder)
+    val c = config(Some(ConfigMapValue(template)))
+    val builder = new WhiskPodBuilder(kubeClient, c)
+    val pod = assertPodSettings(builder, c)
 
     val ac = getActionContainer(pod)
     ac.getSecurityContext.getCapabilities.getDrop.asScala should contain("TEST_CAP")
@@ -78,6 +155,12 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
     pod.getMetadata.getLabels.asScala.get("my-fool") shouldBe Some("my-barv")
     pod.getMetadata.getAnnotations.asScala.get("my-foo") shouldBe Some("my-bar")
     pod.getMetadata.getNamespace shouldBe "whiskns"
+  }
+
+  it should "build a pod disruption budget for the pod, if enabled" in {
+    val c = config()
+    val builder = new WhiskPodBuilder(kubeClient, c)
+    assertPodSettings(builder, c)
   }
 
   it should "extend existing pod template with affinity" in {
@@ -95,21 +178,27 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
        |            values:
        |            - "test"""".stripMargin
 
-    val builder = new WhiskPodBuilder(kubeClient, affinity.copy(enabled = true), Some(ConfigMapValue(template)))
-    val pod = assertPodSettings(builder)
+    val c = config(Some(ConfigMapValue(template)), Some(affinity.copy(enabled = true)))
+    val builder =
+      new WhiskPodBuilder(kubeClient, c)
+    val pod = assertPodSettings(builder, c)
 
     val terms =
       pod.getSpec.getAffinity.getNodeAffinity.getRequiredDuringSchedulingIgnoredDuringExecution.getNodeSelectorTerms.asScala
     terms.exists(_.getMatchExpressions.asScala.exists(_.getKey == "nodelabel")) shouldBe true
   }
 
-  private def assertPodSettings(builder: WhiskPodBuilder): Pod = {
-    val pod = builder.buildPodSpec(name, testImage, memLimit, Map("foo" -> "bar"), Map("fooL" -> "barV"))
+  private def assertPodSettings(builder: WhiskPodBuilder, config: KubernetesClientConfig): Pod = {
+    val labels = Map("fooL" -> "barV")
+    val (pod, pdb) = builder.buildPodSpec(name, testImage, memLimit, Map("foo" -> "bar"), labels, config)
     withClue(Serialization.asYaml(pod)) {
       val c = getActionContainer(pod)
-      c.getEnv.asScala.exists(_.getName == "foo") shouldBe true
+      c.getEnv.asScala.shouldBe(Seq(
+        new EnvVar("foo", "bar", null),
+        new EnvVar("POD_UID", null, new EnvVarSource(null, new ObjectFieldSelector(null, "metadata.uid"), null, null))))
 
       c.getResources.getLimits.asScala.get("memory").map(_.getAmount) shouldBe Some("10Mi")
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("900m")
       c.getSecurityContext.getCapabilities.getDrop.asScala should contain allOf ("NET_RAW", "NET_ADMIN")
       c.getPorts.asScala.find(_.getName == "action").map(_.getContainerPort) shouldBe Some(8080)
       c.getImage shouldBe testImage
@@ -124,6 +213,19 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
           pod.getSpec.getAffinity.getNodeAffinity.getRequiredDuringSchedulingIgnoredDuringExecution.getNodeSelectorTerms.asScala
         terms.exists(_.getMatchExpressions.asScala.exists(_.getKey == affinity.key)) shouldBe true
       }
+    }
+    if (config.pdbEnabled) {
+      println("matching pdb...")
+      pdb shouldBe Some(
+        new PodDisruptionBudgetBuilder().withNewMetadata
+          .withName(name)
+          .addToLabels(labels.asJava)
+          .endMetadata()
+          .withNewSpec()
+          .withMinAvailable(new IntOrString(1))
+          .withSelector(new LabelSelectorBuilder().withMatchLabels(Map("name" -> name).asJava).build())
+          .and
+          .build)
     }
     pod
   }

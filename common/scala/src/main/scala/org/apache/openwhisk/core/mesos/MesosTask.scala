@@ -99,7 +99,7 @@ object MesosTask {
       case "host"   => Host
       case _        => User(network)
     }
-    val dnsOrEmpty = if (dnsServers.nonEmpty) Map("dns" -> dnsServers.toSet) else Map.empty
+    val dnsOrEmpty = if (dnsServers.nonEmpty) Map("dns" -> dnsServers.toSet) else Map.empty[String, Set[String]]
 
     val healthCheckConfig = None
     //define task
