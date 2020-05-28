@@ -338,6 +338,24 @@ class ContainerPoolTests
     containers(1).expectMsg(Start(exec, memoryLimit))
   }
 
+  it should "use a prewarmed container with ttl and create a new one to fill its place" in within(timeout) {
+    val (containers, factory) = testContainers(2)
+    val feed = TestProbe()
+    val ttl = 5.seconds //make sure replaced prewarm has ttl
+    val pool =
+      system.actorOf(
+        ContainerPool
+          .props(
+            factory,
+            poolConfig(MemoryLimit.STD_MEMORY * 2),
+            feed.ref,
+            List(PrewarmingConfig(1, exec, memoryLimit, Some(ReactivePrewarmingConfig(1, 1, ttl, 1, 1))))))
+    containers(0).expectMsg(Start(exec, memoryLimit, Some(ttl)))
+    containers(0).send(pool, NeedWork(preWarmedData(exec.kind, expires = Some(ttl.fromNow))))
+    pool ! runMessage
+    containers(1).expectMsg(Start(exec, memoryLimit, Some(ttl)))
+  }
+
   it should "not use a prewarmed container if it doesn't fit the kind" in within(timeout) {
     val (containers, factory) = testContainers(2)
     val feed = TestProbe()
@@ -1052,17 +1070,20 @@ class ContainerPoolTests
     val (containers, factory) = testContainers(6)
     val feed = TestProbe()
 
+    val ttl = 500.seconds
+    val configs = List(PrewarmingConfig(2, exec, memoryLimit, Some(ReactivePrewarmingConfig(2, 2, ttl, 1, 1))))
     val pool =
-      system.actorOf(ContainerPool
-        .props(factory, poolConfig(MemoryLimit.STD_MEMORY * 5), feed.ref, List(PrewarmingConfig(2, exec, memoryLimit))))
-    containers(0).expectMsg(Start(exec, memoryLimit))
-    containers(1).expectMsg(Start(exec, memoryLimit))
+      system.actorOf(
+        ContainerPool
+          .props(factory, poolConfig(MemoryLimit.STD_MEMORY * 5), feed.ref, configs))
+    containers(0).expectMsg(Start(exec, memoryLimit, Some(ttl)))
+    containers(1).expectMsg(Start(exec, memoryLimit, Some(ttl)))
 
     //removing 2 prewarm containers will start 2 containers via backfill
     containers(0).send(pool, ContainerRemoved(true))
     containers(1).send(pool, ContainerRemoved(true))
-    containers(2).expectMsg(Start(exec, memoryLimit))
-    containers(3).expectMsg(Start(exec, memoryLimit))
+    containers(2).expectMsg(Start(exec, memoryLimit, Some(ttl)))
+    containers(3).expectMsg(Start(exec, memoryLimit, Some(ttl)))
     //make sure extra prewarms are not started
     containers(4).expectNoMessage(100.milliseconds)
     containers(5).expectNoMessage(100.milliseconds)
