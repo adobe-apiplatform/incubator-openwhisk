@@ -17,8 +17,6 @@
 
 package org.apache.openwhisk.core.containerpool.mesos.test
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.ActorRef
 import akka.actor.ActorSystem
 import akka.actor.Status.Failure
@@ -101,7 +99,7 @@ class MesosContainerFactoryTest
   }
 
   // 80 slots, each 265MB
-  val poolConfig = ContainerPoolConfig(21200.MB, 0.5, false, FiniteDuration(1, TimeUnit.MINUTES))
+  val poolConfig = ContainerPoolConfig(21200.MB, 0.5, false, 1.minute, 1.minute, 100)
   val actionMemory = 265.MB
   val mesosCpus = poolConfig.cpuShare(actionMemory) / 1024.0
   def mesosTestData(ref: Option[ActorRef] = None) = new MesosData {
