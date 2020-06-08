@@ -19,7 +19,6 @@ package org.apache.openwhisk.core.containerpool.test
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 
-import akka.actor.ActorRef
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
@@ -35,7 +34,6 @@ import org.scalatest.junit.JUnitRunner
 import akka.actor.ActorRefFactory
 import akka.actor.ActorSystem
 import akka.testkit.ImplicitSender
-import akka.testkit.TestActorRef
 import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import common.{StreamLogging, WhiskProperties}
