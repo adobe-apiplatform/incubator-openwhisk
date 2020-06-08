@@ -474,6 +474,19 @@ class ContainerProxy(factory: (TransactionId,
       rejectBuffered()
       destroyContainer(newData, true)
 
+    // Failed at getting a container due to resource shortage during cold-start run - must retry on either NoData or PreWarmedData
+    case Event(FailureMessage(e: ClusterResourceError), _) =>
+      MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESOURCE_ERROR)
+      context.parent ! ContainerRemoved(false)
+      firstRun.foreach { r =>
+        implicit val tid = r.msg.transid
+        logging.info(this, s"resources (${e.required}) unavailable during cold start, will retry run later")
+        //schedule some delay before resend - resource error will be cleared either by a) cluster scaling or b) other activations completing
+        context.system.scheduler.scheduleOnce(500.milliseconds, context.parent, r)
+      }
+      rejectBuffered()
+      stop()
+
     // Failed after /init (the first run failed)
     case Event(_: FailureMessage, data: PreWarmedData) =>
       activeCount -= 1
@@ -776,6 +789,8 @@ class ContainerProxy(factory: (TransactionId,
       .recoverWith {
         case h: ContainerHealthError =>
           Future.failed(h)
+        case r: ClusterResourceError =>
+          Future.failed(r)
         case InitializationError(interval, response) =>
           Future.successful(
             ContainerProxy
