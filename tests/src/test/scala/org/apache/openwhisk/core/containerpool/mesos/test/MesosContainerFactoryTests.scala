@@ -73,7 +73,7 @@ import org.scalatest.BeforeAndAfterAll
 import scala.collection.JavaConverters._
 
 @RunWith(classOf[JUnitRunner])
-class MesosContainerFactoryTest
+class MesosContainerFactoryTests
     extends TestKit(ActorSystem("MesosActorSystem"))
     with FlatSpecLike
     with Matchers

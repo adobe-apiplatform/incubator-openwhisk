@@ -130,8 +130,6 @@ class MesosContainerFactory(config: WhiskConfig,
   @volatile
   private var closed: Boolean = false
 
-  subscribe()
-
   /** Subscribes Mesos actor to mesos event stream; retry on timeout (which should be unusual). */
   private def subscribe(): Future[Unit] = {
     logging.info(this, s"subscribing to Mesos master at ${mesosConfig.masterUrl}")

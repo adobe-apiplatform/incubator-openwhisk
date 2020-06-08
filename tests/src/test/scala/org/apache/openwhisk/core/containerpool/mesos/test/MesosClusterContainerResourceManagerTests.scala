@@ -15,39 +15,30 @@
  * limitations under the License.
  */
 
-package org.apache.openwhisk.core.containerpool.test
+package org.apache.openwhisk.core.containerpool.mesos.test
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.Address
+import akka.actor.{ActorRef, ActorSystem, Address}
 import akka.cluster.UniqueAddress
-import akka.cluster.ddata.DistributedData
-import akka.cluster.ddata.LWWRegister
-import akka.cluster.ddata.LWWRegisterKey
-import akka.cluster.ddata.ORSet
-import akka.cluster.ddata.ORSetKey
-import akka.cluster.ddata.Replicator.Update
-import akka.cluster.ddata.Replicator.WriteLocal
-import akka.cluster.ddata.SelfUniqueAddress
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
+import akka.cluster.ddata.Replicator.{Update, WriteLocal}
+import akka.cluster.ddata._
+import akka.testkit.{TestKit, TestProbe}
 import com.typesafe.config.ConfigFactory
 import org.apache.openwhisk.common.AkkaLogging
-import org.apache.openwhisk.core.containerpool.AkkaClusterContainerResourceManager
-import org.apache.openwhisk.core.containerpool.ContainerResourceManagerConfig
-import org.apache.openwhisk.core.containerpool.Reservation
+import org.apache.openwhisk.core.containerpool.{
+  AkkaClusterContainerResourceManager,
+  ContainerResourceManagerConfig,
+  Reservation
+}
 import org.apache.openwhisk.core.entity.InvokerInstanceId
-import org.apache.openwhisk.utils.NodeStats
-import org.scalatest.FlatSpecLike
-import org.scalatest.Matchers
 import org.apache.openwhisk.core.entity.size._
-import org.apache.openwhisk.utils.NodeStatsUpdate
+import org.apache.openwhisk.utils.{NodeStats, NodeStatsUpdate}
 import org.junit.runner.RunWith
+import org.scalatest.{FlatSpecLike, Matchers}
 import org.scalatest.junit.JUnitRunner
 
 import scala.concurrent.duration._
 
-object AkkaClusterContainerResourceManagerTest {
+object MesosClusterContainerResourceManagerTests {
   // Define your test specific configuration here
   val config =
     """
@@ -57,11 +48,11 @@ object AkkaClusterContainerResourceManagerTest {
     """
 }
 @RunWith(classOf[JUnitRunner])
-class AkkaClusterContainerResourceManagerTest
+class MesosClusterContainerResourceManagerTests
     extends TestKit(
       ActorSystem(
         "AkkaClusterContainerResourceManager",
-        ConfigFactory.parseString(AkkaClusterContainerResourceManagerTest.config)))
+        ConfigFactory.parseString(MesosClusterContainerResourceManagerTests.config)))
     with FlatSpecLike
     with Matchers {
   val stats = Map(
