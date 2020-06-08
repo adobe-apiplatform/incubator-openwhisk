@@ -42,6 +42,9 @@ import org.scalatest.FlatSpecLike
 import org.scalatest.Matchers
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.utils.NodeStatsUpdate
+import org.junit.runner.RunWith
+import org.scalatest.junit.JUnitRunner
+
 import scala.concurrent.duration._
 
 object AkkaClusterContainerResourceManagerTest {
@@ -53,7 +56,7 @@ object AkkaClusterContainerResourceManagerTest {
     }
     """
 }
-
+@RunWith(classOf[JUnitRunner])
 class AkkaClusterContainerResourceManagerTest
     extends TestKit(
       ActorSystem(
