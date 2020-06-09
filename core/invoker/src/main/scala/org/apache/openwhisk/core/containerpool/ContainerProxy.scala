@@ -789,8 +789,6 @@ class ContainerProxy(factory: (TransactionId,
       .recoverWith {
         case h: ContainerHealthError =>
           Future.failed(h)
-        case r: ClusterResourceError =>
-          Future.failed(r)
         case InitializationError(interval, response) =>
           Future.successful(
             ContainerProxy
