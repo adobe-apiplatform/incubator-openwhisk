@@ -14,15 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-FROM adoptopenjdk/openjdk11-openj9:x86_64-alpine-jdk-11.0.6_10_openj9-0.18.1
-
+FROM adoptopenjdk/openjdk11-openj9:x86_64-debian-jdk-11.0.6_10_openj9-0.18.1-slim
 ENV LANG en_US.UTF-8
 ENV LANGUAGE en_US:en
 ENV LC_ALL en_US.UTF-8
 
-# Switch to the HTTPS endpoint for the apk repositories as per https://github.com/gliderlabs/docker-alpine/issues/184
-RUN sed -i 's/http\:\/\/dl-cdn.alpinelinux.org/https\:\/\/alpine.global.ssl.fastly.net/g' /etc/apk/repositories
-RUN apk add --update sed curl bash && apk update && apk upgrade
+#use cloudfront + https for packages
+RUN echo 'deb https://cloudfront.debian.net/debian/ stable main\n\
+deb https://cloudfront.debian.net/debian-security/ stable/updates main'\
+> /etc/apt/sources.list
+
+RUN apt-get -y install --no-install-recommends \
+      sed curl bash && apt-get -y update && apt-get -y upgrade
 
 RUN mkdir /logs
 

@@ -30,7 +30,7 @@ ENV SWAGGER_UI_DOWNLOAD_SHA256=3d7ef5ddc59e10f132fe99771498f0f1ba7a2cbfb9585f986
 # If this cannot be guaranteed, set `invoker_use_runc: false` in the ansible env.
 ENV DOCKER_VERSION=18.06.3-ce
 
-RUN apk add --update openssl
+RUN apt-get -y install openssl
 
 # Uncomment to fetch latest version of docker instead: RUN wget -qO- https://get.docker.com | sh
 # Install docker client
@@ -56,7 +56,7 @@ ADD build/distributions/controller.tar /
 COPY init.sh /
 RUN chmod +x init.sh
 
-RUN adduser -D -u ${UID} -h /home/${NOT_ROOT_USER} -s /bin/bash ${NOT_ROOT_USER}
+RUN adduser --disabled-password --disabled-login --gecos '' --uid ${UID} --home /home/${NOT_ROOT_USER} ${NOT_ROOT_USER}
 
 # It is possible to run as non root if you dont need invoker capabilities out of the controller today
 # When running it as a non-root user this has implications on the standard directory where runc stores its data.
