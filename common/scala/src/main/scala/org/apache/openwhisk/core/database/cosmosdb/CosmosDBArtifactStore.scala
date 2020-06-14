@@ -23,7 +23,7 @@ import akka.http.scaladsl.model.{ContentType, StatusCodes, Uri}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
-import com.azure.cosmos.CosmosClientException
+import com.azure.cosmos.CosmosException
 import com.azure.cosmos.implementation.Constants.Properties
 import com.azure.cosmos.implementation.{
   AsyncDocumentClient,
@@ -31,9 +31,10 @@ import com.azure.cosmos.implementation.{
   DocumentCollection,
   QueryMetrics,
   RequestOptions,
+  Resource,
   ResourceResponse
 }
-import com.azure.cosmos.models.{AccessCondition, FeedOptions, FeedResponse, ModelBridgeInternal, PartitionKey, Resource}
+import com.azure.cosmos.models.{CosmosQueryRequestOptions, FeedResponse, ModelBridgeInternal, PartitionKey}
 import kamon.metric.MeasurementUnit
 import org.apache.openwhisk.common.{LogMarkerToken, Logging, LoggingMarkers, MetricEmitter, Scheduler, TransactionId}
 import org.apache.openwhisk.core.database.StoreUtils._
@@ -123,7 +124,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     val f = o
       .head()
       .recoverWith {
-        case e: CosmosClientException if isConflict(e) && isNewDocument(doc) =>
+        case e: CosmosException if isConflict(e) && isNewDocument(doc) =>
           val docId = DocId(asJson.fields(_id).convertTo[String])
           //Fetch existing document and check if its deleted
           getRaw(docId).flatMap {
@@ -155,7 +156,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
           collectMetrics(putToken, r.getRequestCharge)
           toDocInfo(r.getResource)
         }, {
-          case e: CosmosClientException if isConflict(e) =>
+          case e: CosmosException if isConflict(e) =>
             transid.finished(this, start, s"[PUT] '$collName', document: '$docinfoStr'; conflict.")
             DocumentConflictException("conflict on 'put'")
           case e => e
@@ -177,10 +178,10 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
           transid.finished(this, start, s"[DEL] '$collName' completed document: '$doc'${extraLogs(r)}", InfoLevel)
           true
         }, {
-          case e: CosmosClientException if isNotFound(e) =>
+          case e: CosmosException if isNotFound(e) =>
             transid.finished(this, start, s"[DEL] '$collName', document: '$doc'; not found.")
             NoDocumentException("not found on 'delete'")
-          case e: CosmosClientException if isConflict(e) =>
+          case e: CosmosException if isConflict(e) =>
             transid.finished(this, start, s"[DEL] '$collName', document: '$doc'; conflict.")
             DocumentConflictException("conflict on 'delete'")
           case e => e
@@ -245,7 +246,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
               deserialize[A, DocumentAbstraction](doc, js)
             }
           }, {
-            case e: CosmosClientException if isNotFound(e) =>
+            case e: CosmosException if isNotFound(e) =>
               transid.finished(this, start, s"[GET] '$collName', document: '$doc'; not found.")
               // for compatibility
               throw NoDocumentException("not found on 'get'")
@@ -280,7 +281,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
         }
       }
       .recoverWith {
-        case e: CosmosClientException if isNotFound(e) =>
+        case e: CosmosException if isNotFound(e) =>
           transid.finished(this, start, s"[GET_BY_ID] '$collName' completed: '$id' not found")
           Future.successful(None)
       }
@@ -303,7 +304,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
         Some(js)
       }
       .recoverWith {
-        case e: CosmosClientException if isNotFound(e) => Future.successful(None)
+        case e: CosmosException if isNotFound(e) => Future.successful(None)
       }
   }
 
@@ -341,11 +342,12 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
     val querySpec = viewMapper.prepareQuery(ddoc, viewName, startKey, endKey, realLimit, realIncludeDocs, descending)
 
-    val options = newFeedOptions()
+    val options = newQueryOptions()
     val queryMetrics = scala.collection.mutable.Buffer[QueryMetrics]()
     if (transid.meta.extraLogging) {
-      options.setPopulateQueryMetrics(true)
-      options.setEmitVerboseTracesInQuery(true)
+      options.setQueryMetricsEnabled(true)
+      //unavailable: see https://github.com/Azure/azure-sdk-for-java/issues/12108
+      //options.setEmitVerboseTracesInQuery(true)
     }
 
     def collectQueryMetrics(r: FeedResponse[Document]): Unit = {
@@ -376,7 +378,8 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
             this,
             s"[QueryMetricsEnabled] Collection [$collName] - Query [${querySpec.getQueryText}].\nQueryMetrics\n[$combinedMetrics]")
         }
-        val stats = viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.getParameters, queryResult)
+        val stats =
+          viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.getParameters.asScala, queryResult)
         val statsToLog = stats.map(s => " " + s).getOrElse("")
         transid.finished(
           this,
@@ -400,12 +403,12 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
     //For aggregates the value is in _aggregates fields
     val f = client
-      .queryDocuments(collection.getSelfLink, querySpec, newFeedOptions())
+      .queryDocuments(collection.getSelfLink, querySpec, newQueryOptions())
       .head()
       .map { r =>
         val res = r.getResults.asScala
         println(s"results: ${res.size} ${res.head}")
-        val count = res.head.getLong(aggregate).longValue
+        val count = res.head.getInt(aggregate)
         transid.finished(this, start, s"[COUNT] '$collName' completed: count $count")
         collectMetrics(countToken, r.getRequestCharge)
         if (count > skip) count - skip else 0L
@@ -462,7 +465,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   def getResourceUsage(): Future[Option[CollectionResourceUsage]] = {
     val opts = new RequestOptions
-    opts.setPopulateQuotaInfo(true)
+    opts.setQuotaInfoEnabled(true)
     client
       .readCollection(collection.getSelfLink, opts)
       .head()
@@ -484,10 +487,10 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     }
   }
 
-  private def isNotFound[A <: DocumentAbstraction](e: CosmosClientException) =
+  private def isNotFound[A <: DocumentAbstraction](e: CosmosException) =
     e.getStatusCode == StatusCodes.NotFound.intValue
 
-  private def isConflict(e: CosmosClientException) = {
+  private def isConflict(e: CosmosException) = {
     e.getStatusCode == StatusCodes.Conflict.intValue || e.getStatusCode == StatusCodes.PreconditionFailed.intValue
   }
 
@@ -540,9 +543,10 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   private def matchRevOption(id: String, etag: String): RequestOptions = {
     val options = newRequestOption(id)
-    val condition = new AccessCondition
-    condition.setCondition(etag)
-    options.setAccessCondition(condition)
+    //val condition = new AccessCondition
+    //condition.setCondition(etag)
+    //options.setAccessCondition(condition)
+    options.setIfMatchETag(etag)
     options
   }
 
@@ -555,8 +559,8 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     options
   }
 
-  private def newFeedOptions() = {
-    val options = new FeedOptions()
+  private def newQueryOptions() = {
+    val options = new CosmosQueryRequestOptions()
 //    options.enableCrossPartitionQuery(true)
     options
   }
@@ -599,7 +603,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   private def extraLogs(r: ResourceResponse[_])(implicit tid: TransactionId): String = {
     if (tid.meta.extraLogging) {
-      " " + r.getCosmosResponseDiagnosticString
+      " " + r.getCosmosDiagnosticString
     } else ""
   }
 }

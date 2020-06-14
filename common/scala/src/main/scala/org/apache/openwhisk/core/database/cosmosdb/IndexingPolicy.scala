@@ -16,15 +16,11 @@
  */
 
 package org.apache.openwhisk.core.database.cosmosdb
-
+import com.azure.cosmos.implementation.apachecommons.lang.StringUtils
+import com.azure.cosmos.implementation.{Constants, DataType, HashIndex, IndexKind, RangeIndex, Index => JIndex}
 import com.azure.cosmos.models.{
-  DataType,
-  HashIndex,
-  IndexKind,
-  RangeIndex,
   ExcludedPath => JExcludedPath,
   IncludedPath => JIncludedPath,
-  Index => JIndex,
   IndexingPolicy => JIndexingPolicy
 }
 //import com.azure.data.cosmos.{DataType, HashIndex, IndexKind, RangeIndex, ExcludedPath => JExcludedPath, IncludedPath => JIncludedPath, Index => JIndex, IndexingPolicy => JIndexingPolicy}
@@ -74,23 +70,25 @@ object IndexingPolicy {
 
 case class IncludedPath(path: String, indexes: Set[Index]) {
   def asJava(): JIncludedPath = {
-    val includedPath = new JIncludedPath()
-    includedPath.setIndexes(indexes.map(_.asJava()).asJava)
+    val includedPath = new JIncludedPath(path)
+    //TODO: setIndexes no longer accessible???
+    //includedPath.setIndexes(indexes.toList.asJava)
     includedPath.setPath(path)
     includedPath
   }
 }
 
 object IncludedPath {
-  def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.getPath, ip.getIndexes.asScala.map(Index(_)).toSet)
+  //TODO: setIndexes no longer accessible???
+  //def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.getPath, ip.getIndexes.asScala.map(Index(_)).toSet)
+  def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.getPath, Set.empty[Index])
 
   def apply(path: String, index: Index): IncludedPath = IncludedPath(path, Set(index))
 }
 
 case class ExcludedPath(path: String) {
   def asJava(): JExcludedPath = {
-    val excludedPath = new JExcludedPath()
-    excludedPath.setPath(path)
+    val excludedPath = new JExcludedPath(path)
     excludedPath
   }
 }
@@ -109,8 +107,16 @@ case class Index(kind: IndexKind, dataType: DataType, precision: Int) {
 
 object Index {
   def apply(index: JIndex): Index = index match {
-    case i: HashIndex  => Index(i.getKind, i.getDataType, i.getPrecision)
-    case i: RangeIndex => Index(i.getKind, i.getDataType, i.getPrecision)
-    case _             => throw new RuntimeException(s"Unsupported kind $index")
+    case i: HashIndex =>
+      Index(
+        IndexKind.valueOf(StringUtils.upperCase(i.getString(Constants.Properties.INDEX_KIND))),
+        i.getDataType,
+        i.getPrecision)
+    case i: RangeIndex =>
+      Index(
+        IndexKind.valueOf(StringUtils.upperCase(i.getString(Constants.Properties.INDEX_KIND))),
+        i.getDataType,
+        i.getPrecision)
+    case _ => throw new RuntimeException(s"Unsupported kind $index")
   }
 }

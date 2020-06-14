@@ -17,8 +17,8 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.cosmos.implementation.{AsyncDocumentClient, Database, DocumentCollection, RequestOptions}
-import com.azure.cosmos.models.{FeedResponse, Resource, SqlParameter, SqlParameterList, SqlQuerySpec}
+import com.azure.cosmos.implementation.{AsyncDocumentClient, Database, DocumentCollection, RequestOptions, Resource}
+import com.azure.cosmos.models.{FeedResponse, SqlParameter, SqlQuerySpec}
 //import com.azure.data.cosmos.internal.AsyncDocumentClient
 //import com.azure.data.cosmos.Resource
 import org.apache.openwhisk.common.Logging
@@ -56,8 +56,8 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
           logging.warn(
             this,
             s"Indexing policy for collection [$collName] found to be different." +
-              s"\nExpected - ${expectedIndexingPolicy.asJava().toJson}" +
-              s"\nExisting - ${existingIndexingPolicy.asJava().toJson}")
+              s"\nExpected - ${expectedIndexingPolicy.asJava()}" +
+              s"\nExisting - ${existingIndexingPolicy.asJava()}")
         }
         coll
       }
@@ -92,7 +92,7 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
    * Prepares a query for fetching any resource by id
    */
   protected def querySpec(id: String) =
-    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", new SqlParameterList(new SqlParameter("@id", id)))
+    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", Seq(new SqlParameter("@id", id)).asJava)
 
   protected def asVector[T <: Resource](r: FeedResponse[T]): Vector[T] = r.getResults.asScala.toVector
 }

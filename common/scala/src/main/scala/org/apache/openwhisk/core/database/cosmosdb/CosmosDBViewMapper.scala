@@ -19,11 +19,10 @@ package org.apache.openwhisk.core.database.cosmosdb
 
 import java.util.Collections
 
-import com.azure.cosmos.models.{PartitionKeyDefinition, SqlParameter, SqlParameterList, SqlQuerySpec}
-//import com.azure.data.cosmos.{PartitionKeyDefinition, SqlParameter, SqlParameterList, SqlQuerySpec}
-import com.azure.cosmos.models.IndexKind.RANGE
-import com.azure.cosmos.models.DataType.STRING
-import com.azure.cosmos.models.DataType.NUMBER
+import com.azure.cosmos.models.{PartitionKeyDefinition, SqlParameter, SqlQuerySpec}
+import com.azure.cosmos.implementation.IndexKind.RANGE
+import com.azure.cosmos.implementation.DataType.STRING
+import com.azure.cosmos.implementation.DataType.NUMBER
 import kamon.metric.MeasurementUnit
 import org.apache.openwhisk.common.{LogMarkerToken, TransactionId, WhiskInstants}
 import org.apache.openwhisk.core.database.ActivationHandler.NS_PATH
@@ -74,8 +73,9 @@ private[cosmosdb] trait CosmosDBViewMapper {
   }
 
   protected def prepareSpec(query: String, params: List[(String, Any)]): SqlQuerySpec = {
-    val paramColl = new SqlParameterList
-    params.foreach { case (k, v) => paramColl.add(new SqlParameter(k, v)) }
+//    val paramColl = new SqlParameterList
+//    params.foreach { case (k, v) => paramColl.add(new SqlParameter(k, v)) }
+    val paramColl = params.map(p => new SqlParameter(p._1, p._2.toString)).asJava
 
     new SqlQuerySpec(query, paramColl)
   }
@@ -88,7 +88,7 @@ private[cosmosdb] trait CosmosDBViewMapper {
   def recordQueryStats(ddoc: String,
                        viewName: String,
                        descending: Boolean,
-                       queryParams: SqlParameterList,
+                       queryParams: Seq[SqlParameter],
                        result: List[JsObject]): Option[String] = None
 }
 
@@ -261,7 +261,7 @@ private[cosmosdb] object ActivationViewMapper extends SimpleMapper with WhiskIns
   override def recordQueryStats(ddoc: String,
                                 viewName: String,
                                 descending: Boolean,
-                                queryParams: SqlParameterList,
+                                queryParams: Seq[SqlParameter],
                                 result: List[JsObject]): Option[String] = {
     val stat = if (viewName == "activations" && descending) {
       // Collect stats for the delta between
@@ -377,9 +377,9 @@ private[cosmosdb] object SubjectViewMapper extends CosmosDBViewMapper {
 
 object CosmosDBViewMapper {
 
-  def paramValue[T](params: SqlParameterList, key: String, clazz: Class[T]): Option[T] = {
+  def paramValue[T](params: Seq[SqlParameter], key: String, clazz: Class[T]): Option[T] = {
     val name = "@" + key
-    params.iterator().asScala.find(_.getName == name).map(_.getValue(clazz).asInstanceOf[T])
+    params.find(_.getName == name).map(_.getValue(clazz).asInstanceOf[T])
   }
 
   def createStatsToken(viewName: String, statName: String, collName: String): LogMarkerToken = {

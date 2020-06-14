@@ -19,8 +19,8 @@ package org.apache.openwhisk.core.database.cosmosdb
 
 import java.util.function.Consumer
 
-import com.azure.cosmos.implementation.ResourceResponse
-import com.azure.cosmos.models.{FeedResponse, Resource}
+import com.azure.cosmos.implementation.{Resource, ResourceResponse}
+import com.azure.cosmos.models.FeedResponse
 import reactor.core.publisher.Mono
 import reactor.core.publisher.Flux
 

@@ -82,7 +82,7 @@ dependencies {
     compile "io.zipkin.reporter2:zipkin-sender-okhttp3:2.6.1"
     compile "io.zipkin.reporter2:zipkin-reporter:2.6.1"
 
-    compile "com.azure:azure-cosmos:4.0.1-beta.4"
+    compile "com.azure:azure-cosmos:4.0.1"
 
     compile "com.sksamuel.elastic4s:elastic4s-http_${gradle.scala.depVersion}:6.7.4"
 
