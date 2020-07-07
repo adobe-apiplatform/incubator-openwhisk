@@ -20,16 +20,10 @@ package org.apache.openwhisk.core.database.cosmosdb.cache
 import java.util
 
 import akka.Done
-import com.azure.cosmos.{
-  ChangeFeedProcessor,
-  ConnectionPolicy,
-  CosmosAsyncClient,
-  CosmosAsyncContainer,
-  CosmosClientBuilder
-}
+import com.azure.cosmos.{ChangeFeedProcessorBuilder, ConnectionMode, CosmosAsyncClient, CosmosAsyncContainer, CosmosClientBuilder}
 import com.azure.cosmos.implementation.changefeed.implementation.ChangeFeedProcessorBuilderImpl
 import com.azure.cosmos.implementation.changefeed.{ChangeFeedObserverCloseReason, ChangeFeedObserverContext}
-import com.azure.cosmos.models.ChangeFeedProcessorOptions
+import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
 import com.fasterxml.jackson.databind.JsonNode
 import org.apache.openwhisk.common.Logging
 import reactor.core.publisher.Mono
@@ -61,13 +55,13 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
     val feedOpts = new ChangeFeedProcessorOptions
     feedOpts.setLeasePrefix(prefix)
     feedOpts.setStartFromBeginning(config.feedConfig.startFromBeginning)
-    val builder = ChangeFeedProcessor
-      .changeFeedProcessorBuilder()
-      .setHostName(config.feedConfig.hostname)
-      .setFeedContainer(targetContainer)
-      .setLeaseContainer(leaseContainer)
-      .setOptions(feedOpts)
-      .asInstanceOf[ChangeFeedProcessorBuilderImpl] //observerFactory is not exposed hence need to cast to impl
+
+    val builder = new ChangeFeedProcessorBuilder().hostName(config.feedConfig.hostname)
+        .feedContainer(targetContainer)
+        .leaseContainer(leaseContainer)
+        .options(feedOpts)
+        .buildChangeFeedProcessor()
+      .asInstanceOf[ChangeFeedProcessorBuilderImpl]
 
     builder.observerFactory(() => ObserverBridge)
     val p = builder.build()
@@ -89,13 +83,11 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
     val info = config.getCollectionInfo(name)
     val client = clients(info)
     val db = client.getDatabase(info.db)
-    val container = db.getContainer(name)
-
-    val resp = if (createIfNotExist) {
-      db.createContainerIfNotExists(name, "/id", info.throughput)
-    } else container.read()
-
-    resp.block().getContainer
+    val throughputProperties = ThroughputProperties.createAutoscaledThroughput(info.throughput)
+    if (createIfNotExist) {
+      db.createContainerIfNotExists(name, "/id", throughputProperties)
+    }
+    db.getContainer(name)
   }
 
   private object ObserverBridge extends com.azure.cosmos.implementation.changefeed.ChangeFeedObserver {
@@ -110,12 +102,16 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
 
 object ChangeFeedConsumer {
   def createCosmosClient(conInfo: ConnectionInfo): CosmosAsyncClient = {
-    val policy = ConnectionPolicy.getDefaultPolicy.setConnectionMode(conInfo.connectionMode)
-    new CosmosClientBuilder()
-      .setEndpoint(conInfo.endpoint)
-      .setKey(conInfo.key)
-      .setConnectionPolicy(policy)
-      .setConsistencyLevel(conInfo.consistencyLevel)
-      .buildAsyncClient()
+    // val policy = ConnectionPolicy.getDefaultPolicy.setConnectionMode(conInfo.connectionMode)
+    val clientBuilder = new CosmosClientBuilder()
+      .endpoint(conInfo.endpoint)
+      .key(conInfo.key)
+      .consistencyLevel(conInfo.consistencyLevel)
+    if (conInfo.connectionMode == ConnectionMode.GATEWAY) {
+      clientBuilder.gatewayMode()
+    } else {
+      clientBuilder.directMode()
+    }
+    clientBuilder.buildAsyncClient()
   }
 }
