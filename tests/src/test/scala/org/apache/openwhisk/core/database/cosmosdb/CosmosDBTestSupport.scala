@@ -18,7 +18,8 @@
 package org.apache.openwhisk.core.database.cosmosdb
 
 import com.azure.cosmos.implementation.Database
-import com.azure.cosmos.models.{SqlParameter, SqlParameterList, SqlQuerySpec}
+import java.util.ArrayList
+import com.azure.cosmos.models.{SqlParameter, SqlQuerySpec}
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike}
 import pureconfig._
 import pureconfig.generic.auto._
@@ -74,8 +75,11 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
       }
   }
 
-  protected def querySpec(id: String) =
-    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", new SqlParameterList(new SqlParameter("@id", id)))
+  protected def querySpec(id: String): SqlQuerySpec = {
+    val paramList = new ArrayList[SqlParameter]
+    paramList.add(new SqlParameter("@id", "AndersenFamily"))
+    new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", paramList)
+  }
 
   private def newDatabase = {
     val databaseDefinition = new Database

@@ -17,8 +17,7 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.cosmos.models.IndexKind.RANGE
-import com.azure.cosmos.models.DataType.STRING
+import com.azure.cosmos.implementation.{IndexKind, DataType}
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
@@ -29,7 +28,7 @@ class IndexingPolicyTests extends FlatSpec with Matchers {
 
   it should "match same instance" in {
     val policy =
-      IndexingPolicy(includedPaths = Set(IncludedPath("foo", Index(RANGE, STRING, -1))))
+      IndexingPolicy(includedPaths = Set(IncludedPath("foo", Index(IndexKind.RANGE, DataType.STRING, -1))))
     IndexingPolicy.isSame(policy, policy) shouldBe true
   }
 
@@ -37,13 +36,13 @@ class IndexingPolicyTests extends FlatSpec with Matchers {
     val policy =
       IndexingPolicy(
         includedPaths =
-          Set(IncludedPath("foo", Index(RANGE, STRING, -1)), IncludedPath("bar", Index(RANGE, STRING, -1))))
+          Set(IncludedPath("foo", Index(IndexKind.RANGE, DataType.STRING, -1)), IncludedPath("bar", Index(IndexKind.RANGE, DataType.STRING, -1))))
 
     val policy2 =
       IndexingPolicy(
         includedPaths = Set(
-          IncludedPath("foo2", Index(RANGE, STRING, -1)),
-          IncludedPath("bar", Set(Index(RANGE, STRING, -1), Index(RANGE, STRING, -1)))))
+          IncludedPath("foo2", Index(IndexKind.RANGE, DataType.STRING, -1)),
+          IncludedPath("bar", Set(Index(IndexKind.RANGE, DataType.STRING, -1), Index(IndexKind.RANGE, DataType.STRING, -1)))))
 
     IndexingPolicy.isSame(policy, policy2) shouldBe false
   }
@@ -52,8 +51,8 @@ class IndexingPolicyTests extends FlatSpec with Matchers {
     val policy =
       IndexingPolicy(
         includedPaths = Set(
-          IncludedPath("foo", Index(RANGE, STRING, -1)),
-          IncludedPath("bar", Set(Index(RANGE, STRING, -1), Index(RANGE, STRING, -1)))))
+          IncludedPath("foo", Index(IndexKind.RANGE, DataType.STRING, -1)),
+          IncludedPath("bar", Set(Index(IndexKind.RANGE, DataType.STRING, -1), Index(IndexKind.RANGE, DataType.STRING, -1)))))
 
     val jpolicy = policy.asJava()
     val policy2 = IndexingPolicy(jpolicy)

@@ -18,9 +18,9 @@
 package org.apache.openwhisk.core.database.cosmosdb
 
 import akka.stream.ActorMaterializer
-import com.azure.cosmos.implementation.{AsyncDocumentClient, DocumentCollection}
-import com.azure.cosmos.models.IndexKind.RANGE
-import com.azure.cosmos.models.DataType.STRING
+import com.azure.cosmos.implementation.{AsyncDocumentClient, DocumentCollection, IndexKind, DataType}
+//import com.azure.cosmos.models.IndexKind.RANGE
+//import com.azure.cosmos.models.DataType.STRING
 //import com.azure.data.cosmos.internal.{AsyncDocumentClient, DocumentCollection}
 //import com.azure.data.cosmos.IndexKind.RANGE
 //import com.azure.data.cosmos.DataType.STRING
@@ -118,7 +118,7 @@ class CosmosDBSupportTests
     coll.getIndexingPolicy.getIncludedPaths.asScala.map(_.getPath).toList
 
   protected def newTestIndexingPolicy(paths: Set[String]): IndexingPolicy =
-    IndexingPolicy(includedPaths = paths.map(p => IncludedPath(p, Index(RANGE, STRING, -1))))
+    IndexingPolicy(includedPaths = paths.map(p => IncludedPath(p, Index(IndexKind.RANGE, DataType.STRING, -1))))
 
   private class CosmosTest(override val config: CosmosDBConfig,
                            override val client: AsyncDocumentClient,

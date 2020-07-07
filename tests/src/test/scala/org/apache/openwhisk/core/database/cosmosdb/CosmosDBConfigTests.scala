@@ -20,7 +20,8 @@ import com.typesafe.config.ConfigFactory
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
-import com.azure.cosmos.{ConnectionMode, ConnectionPolicy => JConnectionPolicy}
+import com.azure.cosmos.{ConnectionMode}
+import com.azure.cosmos.implementation.{ConnectionPolicy => JConnectionPolicy}
 
 import scala.collection.JavaConverters._
 
@@ -46,10 +47,10 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
     policy.isEndpointDiscoveryEnabled shouldBe defaultPolicy.isEndpointDiscoveryEnabled
     policy.getIdleConnectionTimeout.toMillis shouldBe defaultPolicy.getIdleConnectionTimeout.toMillis
-    policy.getMaxPoolSize shouldBe defaultPolicy.getMaxPoolSize
-    policy.getPreferredLocations shouldBe defaultPolicy.getPreferredLocations
+    policy.getMaxConnectionPoolSize shouldBe defaultPolicy.getMaxConnectionPoolSize
+    policy.getPreferredRegions shouldBe defaultPolicy.getPreferredRegions
     policy.getRequestTimeout.toMillis shouldBe defaultPolicy.getRequestTimeout.toMillis
-    policy.isUsingMultipleWriteLocations shouldBe defaultPolicy.isUsingMultipleWriteLocations
+    policy.isMultipleWriteRegionsEnabled shouldBe defaultPolicy.isMultipleWriteRegionsEnabled
 
     val retryOpts = policy.getThrottlingRetryOptions
     val defaultOpts = defaultPolicy.getThrottlingRetryOptions
@@ -125,10 +126,10 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     cosmos.db shouldBe "openwhisk"
 
     val policy = cosmos.connectionPolicy.asJava
-    policy.isUsingMultipleWriteLocations shouldBe true
-    policy.getMaxPoolSize shouldBe 42
+    policy.isEndpointDiscoveryEnabled shouldBe true
+    policy.getMaxConnectionPoolSize shouldBe 42
     policy.getConnectionMode shouldBe ConnectionMode.DIRECT
-    policy.getPreferredLocations.asScala.toSeq should contain only ("a", "b")
+    policy.getPreferredRegions.asScala.toSeq should contain only ("a", "b")
     policy.getThrottlingRetryOptions.getMaxRetryWaitTime.getSeconds shouldBe 120
   }
 }
