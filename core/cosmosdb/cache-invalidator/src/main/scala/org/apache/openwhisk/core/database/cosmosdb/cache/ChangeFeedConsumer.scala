@@ -102,7 +102,6 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
 
 object ChangeFeedConsumer {
   def createCosmosClient(conInfo: ConnectionInfo): CosmosAsyncClient = {
-    // val policy = ConnectionPolicy.getDefaultPolicy.setConnectionMode(conInfo.connectionMode)
     val clientBuilder = new CosmosClientBuilder()
       .endpoint(conInfo.endpoint)
       .key(conInfo.key)
