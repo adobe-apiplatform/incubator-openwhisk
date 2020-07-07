@@ -20,7 +20,13 @@ package org.apache.openwhisk.core.database.cosmosdb.cache
 import java.util
 
 import akka.Done
-import com.azure.cosmos.{ChangeFeedProcessorBuilder, ConnectionMode, CosmosAsyncClient, CosmosAsyncContainer, CosmosClientBuilder}
+import com.azure.cosmos.{
+  ChangeFeedProcessorBuilder,
+  ConnectionMode,
+  CosmosAsyncClient,
+  CosmosAsyncContainer,
+  CosmosClientBuilder
+}
 import com.azure.cosmos.implementation.changefeed.implementation.ChangeFeedProcessorBuilderImpl
 import com.azure.cosmos.implementation.changefeed.{ChangeFeedObserverCloseReason, ChangeFeedObserverContext}
 import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
@@ -56,7 +62,8 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
     feedOpts.setLeasePrefix(prefix)
     feedOpts.setStartFromBeginning(config.feedConfig.startFromBeginning)
 
-    val builder = new ChangeFeedProcessorBuilder().hostName(config.feedConfig.hostname)
+    val builder = new ChangeFeedProcessorBuilder()
+      .hostName(config.feedConfig.hostname)
       .feedContainer(targetContainer)
       .leaseContainer(leaseContainer)
       .options(feedOpts)

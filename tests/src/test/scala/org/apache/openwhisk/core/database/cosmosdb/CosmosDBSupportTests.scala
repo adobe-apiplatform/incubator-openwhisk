@@ -18,7 +18,7 @@
 package org.apache.openwhisk.core.database.cosmosdb
 
 import akka.stream.ActorMaterializer
-import com.azure.cosmos.implementation.{AsyncDocumentClient, DocumentCollection, IndexKind, DataType}
+import com.azure.cosmos.implementation.{AsyncDocumentClient, DataType, DocumentCollection, IndexKind}
 //import com.azure.cosmos.models.IndexKind.RANGE
 //import com.azure.cosmos.models.DataType.STRING
 //import com.azure.data.cosmos.internal.{AsyncDocumentClient, DocumentCollection}
