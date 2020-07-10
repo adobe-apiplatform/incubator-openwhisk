@@ -73,10 +73,7 @@ private[cosmosdb] trait CosmosDBViewMapper {
   }
 
   protected def prepareSpec(query: String, params: List[(String, Any)]): SqlQuerySpec = {
-//    val paramColl = new SqlParameterList
-//    params.foreach { case (k, v) => paramColl.add(new SqlParameter(k, v)) }
-    val paramColl = params.map(p => new SqlParameter(p._1, p._2.toString)).asJava
-
+    val paramColl = params.map(p => new SqlParameter(p._1, p._2)).asJava
     new SqlQuerySpec(query, paramColl)
   }
 

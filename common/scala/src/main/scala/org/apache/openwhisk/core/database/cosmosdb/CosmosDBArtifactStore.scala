@@ -154,7 +154,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
             s"[PUT] '$collName' completed document: '$docinfoStr', size=$docSize, ru=${r.getRequestCharge}${extraLogs(r)}",
             InfoLevel)
           collectMetrics(putToken, r.getRequestCharge)
-          DocInfo(doc.getId)
+          toDocInfo(doc, r.getETag)
         }, {
           case e: CosmosException if isConflict(e) =>
             transid.finished(this, start, s"[PUT] '$collName', document: '$docinfoStr'; conflict.")
@@ -407,7 +407,6 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
       .head()
       .map { r =>
         val res = r.getResults.asScala
-        println(s"results: ${res.size} ${res.head}")
         val count = res.head.getInt(aggregate)
         transid.finished(this, start, s"[COUNT] '$collName' completed: count $count")
         collectMetrics(countToken, r.getRequestCharge)
@@ -530,9 +529,10 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
     (whiskDoc, jsString.length)
   }
 
-  private def toDocInfo[T <: Resource](doc: T) = {
-    checkDoc(doc)
-    DocInfo(DocId(unescapeId(doc.getId)), DocRevision(doc.getETag))
+  private def toDocInfo[T <: Resource](doc: T, etag: String) = {
+//    checkDoc(doc)
+//    DocInfo(DocId(unescapeId(doc.getId)), DocRevision(doc.getETag))
+    DocInfo(DocId(unescapeId(doc.getId)), DocRevision(etag))
   }
 
   private def selfLinkOf(id: DocId) = createSelfLink(escapeId(id.id))
