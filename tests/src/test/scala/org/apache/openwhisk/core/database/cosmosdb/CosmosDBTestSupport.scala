@@ -77,7 +77,7 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
 
   protected def querySpec(id: String): SqlQuerySpec = {
     val paramList = new ArrayList[SqlParameter]
-    paramList.add(new SqlParameter("@id", "AndersenFamily"))
+    paramList.add(new SqlParameter("@id", id))
     new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", paramList)
   }
 

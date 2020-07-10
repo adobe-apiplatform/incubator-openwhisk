@@ -154,7 +154,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
             s"[PUT] '$collName' completed document: '$docinfoStr', size=$docSize, ru=${r.getRequestCharge}${extraLogs(r)}",
             InfoLevel)
           collectMetrics(putToken, r.getRequestCharge)
-          toDocInfo(r.getResource)
+          DocInfo(doc.getId)
         }, {
           case e: CosmosException if isConflict(e) =>
             transid.finished(this, start, s"[PUT] '$collName', document: '$docinfoStr'; conflict.")
