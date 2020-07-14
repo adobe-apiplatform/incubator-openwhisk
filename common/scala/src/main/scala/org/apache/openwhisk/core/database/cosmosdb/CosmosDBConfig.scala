@@ -65,7 +65,6 @@ case class ConnectionPolicy(maxPoolSize: Int,
   def asJava: JConnectionPolicy = {
     val p = if (connectionMode == ConnectionMode.GATEWAY) {
       val config = new GatewayConnectionConfig()
-      config.setMaxConnectionPoolSize(maxPoolSize)
       new JConnectionPolicy(config)
     } else {
       val config = new DirectConnectionConfig()
@@ -75,6 +74,7 @@ case class ConnectionPolicy(maxPoolSize: Int,
     p.setPreferredRegions(preferredLocations.asJava)
     p.setThrottlingRetryOptions(retryOptions.asJava)
     p.setConnectionMode(connectionMode)
+    p.setMaxConnectionPoolSize(maxPoolSize)
     p
   }
 }

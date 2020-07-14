@@ -16,12 +16,12 @@
  */
 
 package org.apache.openwhisk.core.database.cosmosdb
+import com.azure.cosmos.implementation.{ConnectionPolicy => JConnectionPolicy}
+import com.azure.cosmos.{ConnectionMode, GatewayConnectionConfig}
 import com.typesafe.config.ConfigFactory
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
-import com.azure.cosmos.{ConnectionMode}
-import com.azure.cosmos.implementation.{ConnectionPolicy => JConnectionPolicy}
 
 import scala.collection.JavaConverters._
 
@@ -43,7 +43,9 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     //Cosmos SDK does not have equals defined so match them explicitly
     val policy = cosmos.connectionPolicy.asJava
 
-    val defaultPolicy = JConnectionPolicy.getDefaultPolicy()
+    //gateway is no longer default, but we are assuming it is default for OW for now
+    //val defaultPolicy = JConnectionPolicy.getDefaultPolicy()
+    val defaultPolicy = new JConnectionPolicy(GatewayConnectionConfig.getDefaultConfig())
     policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
     policy.isEndpointDiscoveryEnabled shouldBe defaultPolicy.isEndpointDiscoveryEnabled
     policy.getIdleConnectionTimeout.toMillis shouldBe defaultPolicy.getIdleConnectionTimeout.toMillis
@@ -91,7 +93,7 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
 
     cosmos.connectionPolicy.maxPoolSize shouldBe 42
     val policy = cosmos.connectionPolicy.asJava
-    val defaultPolicy = JConnectionPolicy.getDefaultPolicy
+    val defaultPolicy = new JConnectionPolicy(GatewayConnectionConfig.getDefaultConfig())
     policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
     policy.getThrottlingRetryOptions.getMaxRetryAttemptsOnThrottledRequests shouldBe defaultPolicy.getThrottlingRetryOptions.getMaxRetryAttemptsOnThrottledRequests
     policy.getThrottlingRetryOptions.getMaxRetryWaitTime.getSeconds shouldBe defaultPolicy.getThrottlingRetryOptions.getMaxRetryWaitTime.getSeconds
@@ -115,6 +117,7 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
       |           using-multiple-write-locations = true
       |           preferred-locations = [a, b]
       |           connection-mode = DIRECT
+      |           max-pool-size = 42
       |        }
       |     }
       |  }
@@ -124,6 +127,7 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     cosmos.endpoint shouldBe "http://localhost"
     cosmos.key shouldBe "foo"
     cosmos.db shouldBe "openwhisk"
+    cosmos.throughput shouldBe 500
 
     val policy = cosmos.connectionPolicy.asJava
     policy.isEndpointDiscoveryEnabled shouldBe true
