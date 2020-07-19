@@ -23,7 +23,6 @@ import com.azure.cosmos.models.{
   IncludedPath => JIncludedPath,
   IndexingPolicy => JIndexingPolicy
 }
-//import com.azure.data.cosmos.{DataType, HashIndex, IndexKind, RangeIndex, ExcludedPath => JExcludedPath, IncludedPath => JIncludedPath, Index => JIndex, IndexingPolicy => JIndexingPolicy}
 
 import scala.collection.JavaConverters._
 
@@ -68,22 +67,17 @@ object IndexingPolicy {
   private def epaths(excluded: Set[ExcludedPath]) = excluded.map(_.path).filterNot(_.contains("_etag"))
 }
 
-case class IncludedPath(path: String, indexes: Set[Index]) {
+case class IncludedPath(path: String) {
   def asJava(): JIncludedPath = {
     val includedPath = new JIncludedPath(path)
-    //TODO: setIndexes no longer accessible???
-    //includedPath.setIndexes(indexes.toList.asJava)
+    // IncludePath.setIndexes() is no longer available. Reference - https://github.com/Azure/azure-sdk-for-java/pull/11654
     includedPath.setPath(path)
     includedPath
   }
 }
 
 object IncludedPath {
-  //TODO: setIndexes no longer accessible???
-  //def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.getPath, ip.getIndexes.asScala.map(Index(_)).toSet)
-  def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.getPath, Set.empty[Index])
-
-  def apply(path: String, index: Index): IncludedPath = IncludedPath(path, Set(index))
+  def apply(ip: JIncludedPath): IncludedPath = IncludedPath(ip.getPath)
 }
 
 case class ExcludedPath(path: String) {

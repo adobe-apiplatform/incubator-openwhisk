@@ -17,7 +17,6 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.cosmos.implementation.{DataType, IndexKind}
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
@@ -28,36 +27,23 @@ class IndexingPolicyTests extends FlatSpec with Matchers {
 
   it should "match same instance" in {
     val policy =
-      IndexingPolicy(includedPaths = Set(IncludedPath("foo", Index(IndexKind.RANGE, DataType.STRING, -1))))
+      IndexingPolicy(includedPaths = Set(IncludedPath("foo")))
     IndexingPolicy.isSame(policy, policy) shouldBe true
   }
 
   it should "not match when same path are different" in {
     val policy =
-      IndexingPolicy(
-        includedPaths = Set(
-          IncludedPath("foo", Index(IndexKind.RANGE, DataType.STRING, -1)),
-          IncludedPath("bar", Index(IndexKind.RANGE, DataType.STRING, -1))))
+      IndexingPolicy(includedPaths = Set(IncludedPath("foo"), IncludedPath("bar")))
 
     val policy2 =
-      IndexingPolicy(
-        includedPaths = Set(
-          IncludedPath("foo2", Index(IndexKind.RANGE, DataType.STRING, -1)),
-          IncludedPath(
-            "bar",
-            Set(Index(IndexKind.RANGE, DataType.STRING, -1), Index(IndexKind.RANGE, DataType.STRING, -1)))))
+      IndexingPolicy(includedPaths = Set(IncludedPath("foo2"), IncludedPath("bar")))
 
     IndexingPolicy.isSame(policy, policy2) shouldBe false
   }
 
   it should "convert and match java IndexingPolicy" in {
     val policy =
-      IndexingPolicy(
-        includedPaths = Set(
-          IncludedPath("foo", Index(IndexKind.RANGE, DataType.STRING, -1)),
-          IncludedPath(
-            "bar",
-            Set(Index(IndexKind.RANGE, DataType.STRING, -1), Index(IndexKind.RANGE, DataType.STRING, -1)))))
+      IndexingPolicy(includedPaths = Set(IncludedPath("foo"), IncludedPath("bar")))
 
     val jpolicy = policy.asJava()
     val policy2 = IndexingPolicy(jpolicy)
