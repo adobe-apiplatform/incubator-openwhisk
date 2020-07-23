@@ -427,7 +427,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
       //increase the reserved (not yet started container) memory tracker
       resourceManager.addReservation(newContainer, memoryLimit, exec.pull)
     } else {
-      logging.warn(this, "cannot create additional prewarm")
+      logging.warn(this, s"cannot create additional prewarm ${exec.kind} ${memoryLimit.toMB}MB")
     }
   }
 
