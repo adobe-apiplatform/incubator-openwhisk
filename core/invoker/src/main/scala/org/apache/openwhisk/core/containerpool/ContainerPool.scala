@@ -118,8 +118,13 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
         .nextInt(v.toSeconds.toInt))
     .getOrElse(0)
     .seconds
-  context.system.scheduler.schedule(2.seconds, interval, self, AdjustPrewarmedContainer)
 
+  private val periodicPrewarmUpdate =
+    context.system.scheduler.schedule(2.seconds, interval, self, AdjustPrewarmedContainer)
+  override def postStop() = {
+    periodicPrewarmUpdate.cancel()
+    ()
+  }
   def logContainerStart(r: Run, containerState: String, activeActivations: Int, container: Option[Container]): Unit = {
     val namespaceName = r.msg.user.namespace.name
     val actionName = r.action.name.name
@@ -157,53 +162,52 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
           //remove from resent tracking - it may get resent again, or get processed
           resent = None
         }
+        //first attempt to use warm or prewarm:
+        val warmOrPrewam = ContainerPool
+          .schedule(r.action, r.msg.user.namespace.name, freePool)
+          .map(container => (container, container._2.initingState)) //warmed, warming, and warmingCold always know their state
+          .orElse(
+            // There was no warm/warming/warmingCold container. Try to take a prewarm container or a cold container.
+            takePrewarmContainer(r.action)
+              .map(container => (container, "prewarmed")))
+        if (!r.action.exec.pull) {
+          logging.warn(
+            this,
+            s"No warm or prewarm available for ${r.action.exec.kind} ${r.action.limits.memory.megabytes}MB")
+        }
+        //if no warm/prewarm is available, then create or remove+create
         val createdContainer =
-          // Is there enough space on the invoker (or the cluster manager) for this action to be executed.
-          if (hasPoolSpaceFor(busyPool, r.action.limits.memory.megabytes.MB, r.action.exec.pull)) {
-            // Schedule a job to a warm container
-            ContainerPool
-              .schedule(r.action, r.msg.user.namespace.name, freePool)
-              .map(container => (container, container._2.initingState)) //warmed, warming, and warmingCold always know their state
-              .orElse(
-                // There was no warm/warming/warmingCold container. Try to take a prewarm container or a cold container.
-
-                // Is there enough space to create a new container or do other containers have to be removed?
-                if (hasPoolSpaceFor(busyPool ++ freePool, r.action.limits.memory.megabytes.MB, r.action.exec.pull)) {
-                  takePrewarmContainer(r.action)
-                    .map(container => (container, "prewarmed"))
-                    .orElse {
-                      val container =
-                        Some(createContainer(r.action.limits.memory.megabytes.MB, r.action.exec.pull), "cold")
-                      incrementColdStartCount(r.action.exec.kind, r.action.limits.memory.megabytes.MB)
-                      container
-                    }
-                } else None)
-              .orElse( // Remove a container and create a new one for the given job
-                ContainerPool
-                // Only free up the amount, that is really needed to free up
-                  .remove(
-                    freePool,
-                    if (!resMgrConfig.clusterManagedResources) { //do not allow overprovision when cluster manages resources
-                      Math.min(r.action.limits.memory.megabytes, memoryConsumptionOf(freePool)).MB
-                    } else {
-                      r.action.limits.memory.megabytes.MB
-                    },
-                    Instant.now().minusSeconds(resMgrConfig.clusterManagedIdleGrace.toSeconds))
-                  .map(a => removeContainer(a._1))
-                  // If the list had at least one entry, enough containers were removed to start the new container. After
-                  // removing the containers, we are not interested anymore in the containers that have been removed.
-                  .headOption
-                  .map(_ =>
-                    takePrewarmContainer(r.action)
-                      .map(container => (container, "recreatedPrewarm"))
-                      .getOrElse {
-                        val container =
-                          (createContainer(r.action.limits.memory.megabytes.MB, r.action.exec.pull), "recreated")
-                        incrementColdStartCount(r.action.exec.kind, r.action.limits.memory.megabytes.MB)
-                        container
-                    }))
-
-          } else None
+          warmOrPrewam.orElse {
+            if (hasPoolSpaceFor(
+                  busyPool ++ freePool ++ prewarmedPool,
+                  r.action.limits.memory.megabytes.MB,
+                  r.action.exec.pull)) {
+              val container = Some(createContainer(r.action.limits.memory.megabytes.MB, r.action.exec.pull), "cold")
+              incrementColdStartCount(r.action.exec.kind, r.action.limits.memory.megabytes.MB)
+              container
+            } else {
+              None
+            }.orElse {
+              //remove containers to make room in cluster:
+              ContainerPool
+              // Only free up the amount, that is really needed to free up
+                .remove(
+                  freePool,
+                  if (!resMgrConfig.clusterManagedResources) { //do not allow overprovision when cluster manages resources
+                    Math.min(r.action.limits.memory.megabytes, memoryConsumptionOf(freePool)).MB
+                  } else {
+                    r.action.limits.memory.megabytes.MB
+                  },
+                  Instant.now().minusSeconds(resMgrConfig.clusterManagedIdleGrace.toSeconds))
+                .map(a => removeContainer(a._1))
+                // If the list had at least one entry, enough containers were removed to start the new container. After
+                // removing the containers, we are not interested anymore in the containers that have been removed.
+                .headOption
+                .map { _ =>
+                  (createContainer(r.action.limits.memory.megabytes.MB, r.action.exec.pull), "recreated")
+                }
+            }
+          }
 
         createdContainer match {
           case Some(((actor, data), containerState)) =>
@@ -415,7 +419,8 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
   /** Creates a new prewarmed container */
   def prewarmContainer(exec: CodeExec[_], memoryLimit: ByteSize, ttl: Option[FiniteDuration]): Unit = {
     //when using cluster managed resources, we can only create prewarms when allowed by the cluster
-    if (hasPoolSpaceFor(freePool, memoryLimit, false)(TransactionId.invokerWarmup)) {
+    //NOTE: we consider prewarms taking up userMemory space!
+    if (hasPoolSpaceFor(busyPool ++ freePool ++ prewarmedPool, memoryLimit, false)(TransactionId.invokerWarmup)) {
       val newContainer = childFactory(context)
       prewarmStartingPool = prewarmStartingPool + (newContainer -> (exec.kind, memoryLimit))
       newContainer ! Start(exec, memoryLimit, ttl)
