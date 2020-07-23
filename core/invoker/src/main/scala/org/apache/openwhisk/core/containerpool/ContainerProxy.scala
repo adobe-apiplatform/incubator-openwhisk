@@ -369,7 +369,7 @@ class ContainerProxy(factory: (TransactionId,
     case Event(FailureMessage(e: ClusterResourceError), _) =>
       MetricEmitter.emitCounterMetric(LoggingMarkers.CONTAINER_POOL_RESOURCE_ERROR)
       logging.info(this, s"resources (${e.required}) unavailable during prewarm")
-      context.parent ! ContainerRemoved
+      context.parent ! ContainerRemoved(true)
       stop()
 
     // container creation failed
