@@ -47,7 +47,7 @@ class WhiskChangeEventObserver(config: InvalidatorConfig, eventProducer: EventPr
     f.andThen {
       case Success(_) =>
         MetricEmitter.emitCounterMetric(feedCounter, docs.size)
-        // recordLag(docs.last) // TODO - Make it work
+      // recordLag(docs.last) // TODO - Make it work
       case Failure(t) =>
         log.warn(this, "Error occurred while sending cache invalidation message " + Throwables.getStackTraceAsString(t))
     }

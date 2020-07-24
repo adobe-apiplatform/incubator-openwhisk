@@ -21,7 +21,13 @@ import java.util
 import java.util.function.Consumer
 
 import akka.Done
-import com.azure.cosmos.{ChangeFeedProcessorBuilder, ConnectionMode, CosmosAsyncClient, CosmosAsyncContainer, CosmosClientBuilder}
+import com.azure.cosmos.{
+  ChangeFeedProcessorBuilder,
+  ConnectionMode,
+  CosmosAsyncClient,
+  CosmosAsyncContainer,
+  CosmosClientBuilder
+}
 import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
 import com.fasterxml.jackson.databind.JsonNode
 import org.apache.openwhisk.common.Logging
@@ -59,8 +65,8 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
       .feedContainer(targetContainer)
       .leaseContainer(leaseContainer)
       .options(feedOpts)
-      .handleChanges {
-        t: util.List[JsonNode] => handleChangeFeed(t.asScala.toList)
+      .handleChanges { t: util.List[JsonNode] =>
+        handleChangeFeed(t.asScala.toList)
       }
       .buildChangeFeedProcessor()
     (processor, processor.start().toFuture.toScala.map(_ => Done))
