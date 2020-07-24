@@ -18,21 +18,13 @@
 package org.apache.openwhisk.core.database.cosmosdb.cache
 
 import java.util
+import java.util.function.Consumer
 
 import akka.Done
-import com.azure.cosmos.{
-  ChangeFeedProcessorBuilder,
-  ConnectionMode,
-  CosmosAsyncClient,
-  CosmosAsyncContainer,
-  CosmosClientBuilder
-}
-import com.azure.cosmos.implementation.changefeed.implementation.ChangeFeedProcessorBuilderImpl
-import com.azure.cosmos.implementation.changefeed.{ChangeFeedObserverCloseReason, ChangeFeedObserverContext}
+import com.azure.cosmos.{ChangeFeedProcessorBuilder, ConnectionMode, CosmosAsyncClient, CosmosAsyncContainer, CosmosClientBuilder}
 import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
 import com.fasterxml.jackson.databind.JsonNode
 import org.apache.openwhisk.common.Logging
-import reactor.core.publisher.Mono
 
 import scala.collection.JavaConverters._
 import scala.collection.immutable.Seq
@@ -40,7 +32,7 @@ import scala.compat.java8.FutureConverters._
 import scala.concurrent.{ExecutionContext, Future}
 
 trait ChangeFeedObserver {
-  def process(context: ChangeFeedObserverContext, docs: Seq[JsonNode]): Future[Done]
+  def process(docs: Seq[JsonNode]): Future[Done]
 }
 
 class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, observer: ChangeFeedObserver)(
@@ -62,20 +54,26 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
     feedOpts.setLeasePrefix(prefix)
     feedOpts.setStartFromBeginning(config.feedConfig.startFromBeginning)
 
-    val builder = new ChangeFeedProcessorBuilder()
+    val processor = new ChangeFeedProcessorBuilder()
       .hostName(config.feedConfig.hostname)
       .feedContainer(targetContainer)
       .leaseContainer(leaseContainer)
       .options(feedOpts)
+      .handleChanges {
+        t: util.List[JsonNode] => handleChangeFeed(t.asScala.toList)
+      }
       .buildChangeFeedProcessor()
-      .asInstanceOf[ChangeFeedProcessorBuilderImpl] //observerFactory is not exposed hence need to cast to impl
-
-    builder.observerFactory(() => ObserverBridge)
-    val p = builder.build()
-    (p, p.start().toFuture.toScala.map(_ => Done))
+    (processor, processor.start().toFuture.toScala.map(_ => Done))
   }
 
   def isStarted: Future[Done] = startFuture
+
+  def handleConsumer(docs: List[JsonNode]): Consumer[List[JsonNode]] = (t: List[JsonNode]) => handleChangeFeed(t)
+
+  def handleChangeFeed(docs: List[JsonNode]) = {
+    log.info(this, s"docs ${docs}")
+    observer.process(docs)
+  }
 
   def close(): Future[Done] = {
     val f = processor.stop().toFuture.toScala.map(_ => Done)
@@ -98,14 +96,6 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
     db.getContainer(name)
   }
 
-  private object ObserverBridge extends com.azure.cosmos.implementation.changefeed.ChangeFeedObserver {
-    override def open(context: ChangeFeedObserverContext): Unit = {}
-    override def close(context: ChangeFeedObserverContext, reason: ChangeFeedObserverCloseReason): Unit = {}
-    override def processChanges(context: ChangeFeedObserverContext, docs: util.List[JsonNode]): Mono[Void] = {
-      val f = observer.process(context, docs.asScala.toList).map(_ => null).toJava.toCompletableFuture
-      Mono.fromFuture(f)
-    }
-  }
 }
 
 object ChangeFeedConsumer {
@@ -114,6 +104,7 @@ object ChangeFeedConsumer {
       .endpoint(conInfo.endpoint)
       .key(conInfo.key)
       .consistencyLevel(conInfo.consistencyLevel)
+      .contentResponseOnWriteEnabled(true)
     if (conInfo.connectionMode == ConnectionMode.GATEWAY) {
       clientBuilder.gatewayMode()
     } else {

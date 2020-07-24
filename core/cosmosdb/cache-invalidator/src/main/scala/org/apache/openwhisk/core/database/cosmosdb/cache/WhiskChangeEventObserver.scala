@@ -39,7 +39,7 @@ class WhiskChangeEventObserver(config: InvalidatorConfig, eventProducer: EventPr
     extends ChangeFeedObserver {
   import WhiskChangeEventObserver._
 
-  override def process(context: ChangeFeedObserverContext, docs: Seq[JsonNode]): Future[Done] = {
+  override def process(docs: Seq[JsonNode]): Future[Done] = {
     //Each observer is called from a pool managed by CosmosDB ChangeFeedProcessor
     //So its fine to have a blocking wait. If this fails then batch would be reread and
     //retried thus ensuring at-least-once semantics
@@ -47,7 +47,7 @@ class WhiskChangeEventObserver(config: InvalidatorConfig, eventProducer: EventPr
     f.andThen {
       case Success(_) =>
         MetricEmitter.emitCounterMetric(feedCounter, docs.size)
-        recordLag(context, docs.last)
+        // recordLag(docs.last) // TODO - Make it work
       case Failure(t) =>
         log.warn(this, "Error occurred while sending cache invalidation message " + Throwables.getStackTraceAsString(t))
     }
