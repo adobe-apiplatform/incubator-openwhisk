@@ -379,7 +379,7 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
             s"[QueryMetricsEnabled] Collection [$collName] - Query [${querySpec.getQueryText}].\nQueryMetrics\n[$combinedMetrics]")
         }
         val stats =
-          viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.getParameters.asScala, queryResult)
+          viewMapper.recordQueryStats(ddoc, viewName, descending, querySpec.getParameters.asScala.toSeq, queryResult)
         val statsToLog = stats.map(s => " " + s).getOrElse("")
         transid.finished(
           this,
