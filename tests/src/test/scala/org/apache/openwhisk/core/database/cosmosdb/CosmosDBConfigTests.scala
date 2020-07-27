@@ -48,7 +48,7 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     val defaultPolicy = new JConnectionPolicy(GatewayConnectionConfig.getDefaultConfig())
     policy.getConnectionMode shouldBe defaultPolicy.getConnectionMode
     policy.isEndpointDiscoveryEnabled shouldBe defaultPolicy.isEndpointDiscoveryEnabled
-    policy.getIdleConnectionTimeout.toMillis shouldBe defaultPolicy.getIdleConnectionTimeout.toMillis
+    policy.getIdleHttpConnectionTimeout.toMillis shouldBe defaultPolicy.getIdleHttpConnectionTimeout.toMillis
     policy.getMaxConnectionPoolSize shouldBe defaultPolicy.getMaxConnectionPoolSize
     policy.getPreferredRegions shouldBe defaultPolicy.getPreferredRegions
     policy.getRequestTimeout.toMillis shouldBe defaultPolicy.getRequestTimeout.toMillis

@@ -29,11 +29,18 @@ import org.apache.kafka.common.serialization.StringDeserializer
 import pureconfig._
 import pureconfig.generic.auto._
 
+import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 
 object OpenWhiskEvents extends SLF4JLogging {
 
-  case class MetricConfig(port: Int, enableKamon: Boolean, ignoredNamespaces: Set[String])
+  case class MetricConfig(port: Int,
+                          enableKamon: Boolean,
+                          ignoredNamespaces: Set[String],
+                          renameTags: Map[String, String],
+                          retry: RetryConfig)
+
+  case class RetryConfig(minBackoff: FiniteDuration, maxBackoff: FiniteDuration, randomFactor: Double, maxRestarts: Int)
 
   def start(config: Config)(implicit system: ActorSystem,
                             materializer: ActorMaterializer): Future[Http.ServerBinding] = {
@@ -45,7 +52,7 @@ object OpenWhiskEvents extends SLF4JLogging {
 
     val metricConfig = loadConfigOrThrow[MetricConfig](config, "whisk.user-events")
 
-    val prometheusRecorder = PrometheusRecorder(prometheusReporter)
+    val prometheusRecorder = PrometheusRecorder(prometheusReporter, metricConfig)
     val recorders = if (metricConfig.enableKamon) Seq(prometheusRecorder, KamonRecorder) else Seq(prometheusRecorder)
     val eventConsumer = EventConsumer(eventConsumerSettings(defaultConsumerConfig(config)), recorders, metricConfig)
 

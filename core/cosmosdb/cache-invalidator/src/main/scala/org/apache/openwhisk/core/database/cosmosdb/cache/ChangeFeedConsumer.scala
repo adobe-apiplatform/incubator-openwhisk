@@ -18,9 +18,9 @@
 package org.apache.openwhisk.core.database.cosmosdb.cache
 
 import java.util
-import java.util.function.Consumer
 
 import akka.Done
+import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
 import com.azure.cosmos.{
   ChangeFeedProcessorBuilder,
   ConnectionMode,
@@ -28,7 +28,6 @@ import com.azure.cosmos.{
   CosmosAsyncContainer,
   CosmosClientBuilder
 }
-import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
 import com.fasterxml.jackson.databind.JsonNode
 import org.apache.openwhisk.common.Logging
 

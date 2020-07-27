@@ -57,8 +57,15 @@
                 },
                 "stemCells": [
                     {
-                        "count": 2,
-                        "memory": "256 MB"
+                        "initialCount": 2,
+                        "memory": "256 MB",
+                        "reactive": {
+                            "minCount": 1,
+                            "maxCount": 4,
+                            "ttl": "2 minutes",
+                            "threshold": 1,
+                            "increment": 1
+                        }
                     }
                 ]
             },
@@ -68,6 +75,20 @@
                 "image": {
                     "prefix": "openwhisk",
                     "name": "action-nodejs-v12",
+                    "tag": "nightly"
+                },
+                "deprecated": false,
+                "attached": {
+                    "attachmentName": "codefile",
+                    "attachmentType": "text/plain"
+                }
+            },
+            {
+                "kind": "nodejs:14",
+                "default": false,
+                "image": {
+                    "prefix": "openwhisk",
+                    "name": "action-nodejs-v14",
                     "tag": "nightly"
                 },
                 "deprecated": false,
