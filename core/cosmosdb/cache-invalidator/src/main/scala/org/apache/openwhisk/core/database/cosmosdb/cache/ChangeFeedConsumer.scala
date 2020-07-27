@@ -74,8 +74,6 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
 
   def isStarted: Future[Done] = startFuture
 
-  def handleConsumer(docs: List[JsonNode]): Consumer[List[JsonNode]] = (t: List[JsonNode]) => handleChangeFeed(t)
-
   def handleChangeFeed(docs: List[JsonNode]) = {
     log.info(this, s"docs ${docs}")
     observer.process(docs)
