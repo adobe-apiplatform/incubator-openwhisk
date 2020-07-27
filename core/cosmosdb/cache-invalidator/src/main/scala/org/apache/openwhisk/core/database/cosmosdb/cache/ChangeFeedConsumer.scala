@@ -18,7 +18,6 @@
 package org.apache.openwhisk.core.database.cosmosdb.cache
 
 import java.util
-import java.util.function.Consumer
 
 import akka.Done
 import com.azure.cosmos.{
