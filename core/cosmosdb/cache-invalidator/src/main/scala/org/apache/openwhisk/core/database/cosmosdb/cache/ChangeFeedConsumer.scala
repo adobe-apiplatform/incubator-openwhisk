@@ -22,6 +22,7 @@ import java.util
 import akka.Done
 import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
 import com.azure.cosmos.{
+  ChangeFeedProcessor,
   ChangeFeedProcessorBuilder,
   ConnectionMode,
   CosmosAsyncClient,
@@ -46,57 +47,76 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
   import ChangeFeedConsumer._
 
   log.info(this, s"Watching changes in $collName with lease managed in ${config.feedConfig.leaseCollection}")
+  val clients = scala.collection.mutable.Map[ConnectionInfo, CosmosAsyncClient]().withDefault(createCosmosClient)
 
-  private val clients =
-    scala.collection.mutable.Map[ConnectionInfo, CosmosAsyncClient]().withDefault(createCosmosClient)
-  private val targetContainer = getContainer(collName)
-  private val leaseContainer = getContainer(config.feedConfig.leaseCollection, createIfNotExist = true)
-  private val (processor, startFuture) = {
-    val clusterId = config.invalidatorConfig.clusterId
-    val prefix = clusterId.map(id => s"$id-$collName").getOrElse(collName)
+  var processor: Option[ChangeFeedProcessor] = None
+  def start: Future[Done] = {
+    def getContainer(name: String, createIfNotExist: Boolean = false): CosmosAsyncContainer = {
+      val info = config.getCollectionInfo(name)
+      val client = clients(info)
+      val db = client.getDatabase(info.db)
 
-    val feedOpts = new ChangeFeedProcessorOptions
-    feedOpts.setLeasePrefix(prefix)
-    feedOpts.setStartFromBeginning(config.feedConfig.startFromBeginning)
-
-    val processor = new ChangeFeedProcessorBuilder()
-      .hostName(config.feedConfig.hostname)
-      .feedContainer(targetContainer)
-      .leaseContainer(leaseContainer)
-      .options(feedOpts)
-      .handleChanges { t: util.List[JsonNode] =>
-        handleChangeFeed(t.asScala.toList)
+      val throughputProperties = ThroughputProperties.createAutoscaledThroughput(info.throughput)
+      if (createIfNotExist) {
+        db.createContainerIfNotExists(name, "/id", throughputProperties)
       }
-      .buildChangeFeedProcessor()
-    (processor, processor.start().toFuture.toScala.map(_ => Done))
+      db.getContainer(name)
+    }
+
+    try {
+      val targetContainer = getContainer(collName)
+      val leaseContainer = getContainer(config.feedConfig.leaseCollection, createIfNotExist = true)
+
+      val clusterId = config.invalidatorConfig.clusterId
+      val prefix = clusterId.map(id => s"$id-$collName").getOrElse(collName)
+
+      val feedOpts = new ChangeFeedProcessorOptions
+      feedOpts.setLeasePrefix(prefix)
+      feedOpts.setStartFromBeginning(config.feedConfig.startFromBeginning)
+
+      val p = new ChangeFeedProcessorBuilder()
+        .hostName(config.feedConfig.hostname)
+        .feedContainer(targetContainer)
+        .leaseContainer(leaseContainer)
+        .options(feedOpts)
+        .handleChanges { t: util.List[JsonNode] =>
+          handleChangeFeed(t.asScala.toList)
+        }
+        .buildChangeFeedProcessor()
+      processor = Some(p)
+      p.start().toFuture.toScala.map(_ => Done)
+    } catch {
+      case t: Throwable => Future.failed(t)
+    }
   }
 
-  def isStarted: Future[Done] = startFuture
+  def close(): Future[Done] = {
+
+    processor
+      .map { p =>
+        // be careful about exceptions thrown during ChangeFeedProcessor.stop()
+        // e.g. calling stop() before start() completed, etc will throw exceptions
+        try {
+          p.stop().toFuture.toScala.map(_ => Done)
+        } catch {
+          case t: Throwable =>
+            log.warn(this, s"Failed to stop processor ${t}")
+            Future.failed(t)
+        }
+      }
+      .getOrElse(Future.successful(Done))
+      .andThen {
+        case _ =>
+          log.info(this, "Closing cosmos clients.")
+          clients.values.foreach(c => c.close())
+          Future.successful(Done)
+      }
+
+  }
 
   def handleChangeFeed(docs: List[JsonNode]) = {
     log.info(this, s"docs ${docs}")
     observer.process(docs)
-  }
-
-  def close(): Future[Done] = {
-    val f = processor.stop().toFuture.toScala.map(_ => Done)
-    f.andThen {
-      case _ =>
-        clients.values.foreach(c => c.close())
-        Future.successful(Done)
-    }
-  }
-
-  private def getContainer(name: String, createIfNotExist: Boolean = false): CosmosAsyncContainer = {
-    val info = config.getCollectionInfo(name)
-    val client = clients(info)
-    val db = client.getDatabase(info.db)
-
-    val throughputProperties = ThroughputProperties.createAutoscaledThroughput(info.throughput)
-    if (createIfNotExist) {
-      db.createContainerIfNotExists(name, "/id", throughputProperties)
-    }
-    db.getContainer(name)
   }
 
 }
