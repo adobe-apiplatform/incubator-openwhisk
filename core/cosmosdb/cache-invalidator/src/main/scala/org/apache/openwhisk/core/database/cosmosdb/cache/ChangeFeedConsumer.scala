@@ -55,10 +55,9 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
       val info = config.getCollectionInfo(name)
       val client = clients(info)
       val db = client.getDatabase(info.db)
-
-      val throughputProperties = ThroughputProperties.createAutoscaledThroughput(info.throughput)
       if (createIfNotExist) {
-        db.createContainerIfNotExists(name, "/id", throughputProperties)
+        val throughputProperties = ThroughputProperties.createManualThroughput(info.throughput)
+        db.createContainerIfNotExists(name, "/id", throughputProperties).block()
       }
       db.getContainer(name)
     }

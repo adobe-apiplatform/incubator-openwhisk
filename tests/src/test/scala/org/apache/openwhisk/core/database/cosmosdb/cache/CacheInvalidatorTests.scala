@@ -16,7 +16,6 @@
  */
 
 package org.apache.openwhisk.core.database.cosmosdb.cache
-import java.net.UnknownHostException
 
 import akka.Done
 import akka.actor.CoordinatedShutdown
@@ -149,7 +148,9 @@ class CacheInvalidatorTests
     val cacheInvalidator = startCacheInvalidatorWithoutCosmos()
     val (start, finish) = cacheInvalidator.start()
     //when db config is broken, we expect reactor.core.Exceptions$ReactiveException (a non-public RuntimeException)
-    start.failed.futureValue.getCause shouldBe an[UnknownHostException]
+    // in case of database configurations broken the CosmosAsyncClient throws AssertionError
+    // as it assert for DB initialization completion.
+    start.failed.futureValue.getCause shouldBe an[AssertionError]
   }
 
   private def randomString() = Random.alphanumeric.take(5).mkString
