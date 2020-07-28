@@ -805,7 +805,6 @@ class ContainerPoolTests
     eventually {
       stream.toString should not include ("started")
     }
-    system.stop(pool)
   }
 
   it should "adjust prewarm container run well with reactive config" in {
