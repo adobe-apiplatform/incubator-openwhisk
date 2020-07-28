@@ -805,6 +805,7 @@ class ContainerPoolTests
     eventually {
       stream.toString should not include ("started")
     }
+    system.stop(pool)
   }
 
   it should "adjust prewarm container run well with reactive config" in {
@@ -825,6 +826,7 @@ class ContainerPoolTests
       system.actorOf(
         ContainerPool
           .props(factory, poolConfig, feed.ref, List(PrewarmingConfig(initialCount, exec, memoryLimit, reactive))))
+    //start 2 prewarms
     containers(0).expectMsg(Start(exec, memoryLimit, Some(ttl)))
     containers(1).expectMsg(Start(exec, memoryLimit, Some(ttl)))
     containers(0).send(pool, NeedWork(preWarmedData(exec.kind, expires = deadline)))
@@ -840,7 +842,7 @@ class ContainerPoolTests
 
     // Make sure AdjustPrewarmedContainer is sent by ContainerPool's scheduler after prewarmExpirationCheckIntervel time
     Thread.sleep(prewarmExpirationCheckIntervel.toMillis)
-
+    //expire 2 prewarms
     containers(0).expectMsg(Remove)
     containers(1).expectMsg(Remove)
     containers(0).send(pool, ContainerRemoved(false))
@@ -861,7 +863,7 @@ class ContainerPoolTests
       exec,
       limits = ActionLimits(memory = MemoryLimit(memoryLimit)))
     val run = createRunMessage(action, invocationNamespace)
-    // 2 code start happened
+    // 2 cold start happened
     pool ! run
     pool ! run
     containers(2).expectMsg(run)
@@ -876,7 +878,7 @@ class ContainerPoolTests
       // the desiredCount should equal with 2 due to cold start happened
       stream.toString should include(s"desired count: 2")
     }
-
+    //add 2 prewarms due to increments
     containers(4).expectMsg(Start(exec, memoryLimit, Some(ttl)))
     containers(5).expectMsg(Start(exec, memoryLimit, Some(ttl)))
     containers(4).send(pool, NeedWork(preWarmedData(exec.kind, expires = deadline)))

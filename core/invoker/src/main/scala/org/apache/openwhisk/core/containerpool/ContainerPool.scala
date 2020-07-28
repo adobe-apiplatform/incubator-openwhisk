@@ -379,7 +379,20 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
 
   /** adjust prewarm containers up to the configured requirements for each kind/memory combination. */
   def adjustPrewarmedContainer(init: Boolean, scheduled: Boolean): Unit = {
-    //fill in missing prewarms
+    if (scheduled) {
+      //on scheduled time, remove expired prewarms
+      ContainerPool.removeExpired(poolConfig, prewarmConfig, prewarmedPool).foreach { p =>
+        prewarmedPool = prewarmedPool - p
+        p ! Remove
+      }
+      //on scheduled time, emit cold start counter metric with memory + kind
+      coldStartCount foreach { coldStart =>
+        val coldStartKey = coldStart._1
+        MetricEmitter.emitCounterMetric(
+          LoggingMarkers.CONTAINER_POOL_PREWARM_COLDSTART(coldStartKey.memory.toString, coldStartKey.kind))
+      }
+    }
+    //fill in missing prewarms (replaces any deletes)
     ContainerPool
       .increasePrewarms(init, scheduled, coldStartCount, prewarmConfig, prewarmedPool, prewarmStartingPool)
       .foreach { c =>
@@ -393,15 +406,7 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
         }
       }
     if (scheduled) {
-      //on scheduled time, remove expired prewarms
-      ContainerPool.removeExpired(poolConfig, prewarmConfig, prewarmedPool).foreach(_ ! Remove)
-      //on scheduled time, emit cold start counter metric with memory + kind
-      coldStartCount foreach { coldStart =>
-        val coldStartKey = coldStart._1
-        MetricEmitter.emitCounterMetric(
-          LoggingMarkers.CONTAINER_POOL_PREWARM_COLDSTART(coldStartKey.memory.toString, coldStartKey.kind))
-      }
-      //   then clear coldStartCounts each time scheduled event is processed to reset counts
+      //   lastly, clear coldStartCounts each time scheduled event is processed to reset counts
       coldStartCount = immutable.Map.empty[ColdStartKey, Int]
     }
   }
@@ -645,7 +650,7 @@ object ContainerPool {
           .map { c =>
             val expiredPrewarmedContainer = prewarmedPool.toSeq
               .sortBy(_._2.expires.getOrElse(now))
-              .dropRight(c.minCount) //ignore the newest prewarms up to minCount, even if they are expired (don't remove expired if they will drop us below minCount)
+              //.dropRight(c.minCount) //ignore the newest prewarms up to minCount, even if they are expired (don't remove expired if they will drop us below minCount)
               .filter { warmInfo =>
                 warmInfo match {
                   case (_, p @ PreWarmedData(_, `kind`, `memory`, _, _)) if p.isExpired() => true
@@ -668,6 +673,11 @@ object ContainerPool {
       .map(_._1)
     if (expireds.nonEmpty) {
       logging.info(this, s"removing up to ${poolConfig.prewarmExpirationLimit} of ${expireds.size} expired containers")
+      expireds.take(poolConfig.prewarmExpirationLimit).foreach { e =>
+        prewarmedPool.get(e).map { d =>
+          logging.info(this, s"removing expired prewarm of kind ${d.kind} with container ${d.container} ")
+        }
+      }
     }
     expireds.take(poolConfig.prewarmExpirationLimit)
   }
@@ -694,7 +704,6 @@ object ContainerPool {
     prewarmConfig.map { config =>
       val kind = config.exec.kind
       val memory = config.memoryLimit
-
       val runningCount = prewarmedPool.count {
         // done starting (include expired, since they may not have been removed yet)
         case (_, p @ PreWarmedData(_, `kind`, `memory`, _, _)) => true
