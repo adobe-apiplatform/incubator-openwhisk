@@ -156,7 +156,7 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
       .map(lag => {
         log.info(this, s"estimated lag is ${lag}")
         lag.asScala.keys.foreach(key => {
-          val pk = key.split("_")(0)
+          val pk = key.split("_")(1)
           val gaugeToken = lags.getOrElseUpdate(pk, createLagToken(pk))
           MetricEmitter.emitGaugeMetric(gaugeToken, lag.asScala(key).longValue())
         })
