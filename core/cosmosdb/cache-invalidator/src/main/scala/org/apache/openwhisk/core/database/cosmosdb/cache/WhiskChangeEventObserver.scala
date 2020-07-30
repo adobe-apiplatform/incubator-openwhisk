@@ -19,20 +19,15 @@ package org.apache.openwhisk.core.database.cosmosdb.cache
 
 import akka.Done
 import com.azure.cosmos.implementation.Constants
-import com.azure.cosmos.implementation.changefeed.ChangeFeedObserverContext
 import com.fasterxml.jackson.databind.JsonNode
-import com.google.common.base.Throwables
-import kamon.metric.MeasurementUnit
-import org.apache.openwhisk.common.{LogMarkerToken, Logging, MetricEmitter}
+import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.core.database.CacheInvalidationMessage
 import org.apache.openwhisk.core.database.cosmosdb.CosmosDBConstants
 import org.apache.openwhisk.core.database.cosmosdb.CosmosDBUtil.unescapeId
 import org.apache.openwhisk.core.entity.CacheKey
 
-import scala.collection.concurrent.TrieMap
 import scala.collection.immutable.Seq
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Failure, Success}
 
 class WhiskChangeEventObserver(config: InvalidatorConfig, eventProducer: EventProducer)(implicit ec: ExecutionContext,
                                                                                         log: Logging)
@@ -43,14 +38,7 @@ class WhiskChangeEventObserver(config: InvalidatorConfig, eventProducer: EventPr
     //Each observer is called from a pool managed by CosmosDB ChangeFeedProcessor
     //So its fine to have a blocking wait. If this fails then batch would be reread and
     //retried thus ensuring at-least-once semantics
-    val f = eventProducer.send(processDocs(docs, config))
-    f.andThen {
-      case Success(_) =>
-        MetricEmitter.emitCounterMetric(feedCounter, docs.size)
-      // recordLag(docs.last) // TODO - Make it work
-      case Failure(t) =>
-        log.warn(this, "Error occurred while sending cache invalidation message " + Throwables.getStackTraceAsString(t))
-    }
+    eventProducer.send(processDocs(docs, config))
   }
 }
 
@@ -60,40 +48,6 @@ trait EventProducer {
 
 object WhiskChangeEventObserver {
   val instanceId = "cache-invalidator"
-  private val feedCounter =
-    LogMarkerToken("cosmosdb", "change_feed", "count", tags = Map("collection" -> "whisks"))(MeasurementUnit.none)
-  private val lags = new TrieMap[String, LogMarkerToken]
-
-  /**
-   * Records the current lag on per partition basis. In ideal cases the lag should not continue to increase
-   */
-  def recordLag(context: ChangeFeedObserverContext, lastDoc: JsonNode): Unit = {
-    val sessionToken = context.getFeedResponse.getSessionToken
-    val lsnRef = lastDoc.get("_lsn")
-    require(lsnRef != null, s"Non lsn defined in document $lastDoc")
-
-    val lsn = lsnRef.toString.toLong
-    val sessionLsn = getSessionLsn(sessionToken)
-    val lag = sessionLsn - lsn
-    val partitionKey = context.getPartitionKeyRangeId
-    val gaugeToken = lags.getOrElseUpdate(partitionKey, createLagToken(partitionKey))
-    MetricEmitter.emitGaugeMetric(gaugeToken, lag)
-  }
-
-  private def createLagToken(partitionKey: String) = {
-    LogMarkerToken("cosmosdb", "change_feed", "lag", tags = Map("collection" -> "whisks", "pk" -> partitionKey))(
-      MeasurementUnit.none)
-  }
-
-  def getSessionLsn(token: String): Long = {
-    // Session Token can be in two formats. Either {PartitionKeyRangeId}:{LSN}
-    // or {PartitionKeyRangeId}:{Version}#{GlobalLSN}
-    // See https://github.com/Azure/azure-documentdb-changefeedprocessor-dotnet/pull/113/files#diff-54cbd8ddcc33cab4120c8af04869f881
-    val parsedSessionToken = token.substring(token.indexOf(":") + 1)
-    val segments = parsedSessionToken.split("#")
-    val lsn = if (segments.size < 2) segments(0) else segments(1)
-    lsn.toLong
-  }
 
   def processDocs(docs: Seq[JsonNode], config: InvalidatorConfig)(implicit log: Logging): Seq[String] = {
     docs

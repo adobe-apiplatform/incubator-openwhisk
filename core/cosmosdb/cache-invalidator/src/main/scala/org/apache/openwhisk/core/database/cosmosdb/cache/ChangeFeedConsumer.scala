@@ -18,8 +18,13 @@
 package org.apache.openwhisk.core.database.cosmosdb.cache
 
 import java.util
+import java.util.function.Consumer
 
 import akka.Done
+import reactor.core.publisher.Mono
+
+import scala.collection.concurrent.TrieMap
+import scala.concurrent.Promise
 import com.azure.cosmos.models.{ChangeFeedProcessorOptions, ThroughputProperties}
 import com.azure.cosmos.{
   ChangeFeedProcessor,
@@ -30,12 +35,15 @@ import com.azure.cosmos.{
   CosmosClientBuilder
 }
 import com.fasterxml.jackson.databind.JsonNode
-import org.apache.openwhisk.common.Logging
+import com.google.common.base.Throwables
+import kamon.metric.MeasurementUnit
+import org.apache.openwhisk.common.{LogMarkerToken, Logging, MetricEmitter}
 
 import scala.collection.JavaConverters._
 import scala.collection.immutable.Seq
 import scala.compat.java8.FutureConverters._
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success}
 
 trait ChangeFeedObserver {
   def process(docs: Seq[JsonNode]): Future[Done]
@@ -50,6 +58,8 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
   val clients = scala.collection.mutable.Map[ConnectionInfo, CosmosAsyncClient]().withDefault(createCosmosClient)
 
   var processor: Option[ChangeFeedProcessor] = None
+  var lags = new TrieMap[String, LogMarkerToken]
+
   def start: Future[Done] = {
     def getContainer(name: String, createIfNotExist: Boolean = false): CosmosAsyncContainer = {
       val info = config.getCollectionInfo(name)
@@ -113,14 +123,71 @@ class ChangeFeedConsumer(collName: String, config: CacheInvalidatorConfig, obser
 
   }
 
-  def handleChangeFeed(docs: List[JsonNode]) = {
+  def handleChangeFeed(docs: List[JsonNode]): Future[Done] = {
     log.info(this, s"docs ${docs}")
-    observer.process(docs)
+    val f = observer.process(docs)
+    f.andThen {
+      case Success(_) =>
+        MetricEmitter.emitCounterMetric(feedCounter, docs.size)
+        recordLag()
+      case Failure(t) =>
+        log.warn(this, "Error occurred while sending cache invalidation message " + Throwables.getStackTraceAsString(t))
+    }
   }
 
+  /**
+   * Records the current lag on per partition basis.
+   *
+   */
+  private def recordLag(): Unit = {
+    // FeedProcessor's getEstimatedLag provides a Map of current owner (host) and
+    // an approximation of the difference between the last processed item
+    // and the latest change in the container for each partition (lease document).
+    // Example - 'cache-invalidator_0_169011_169259=249'
+    // where cache-invalidator_0_169011_169259 (is owner as (Host)_(LeaseTokenOrPartitionKey)_(CurrentLsn)_(LatestLsn)
+    // 249 is estimated lag (LatestLsn - CurrentLsn + 1).
+    // In case there is zero lag, map is returns as 'cache-invalidator_0=0'
+    // An empty map will be returned
+    // - if the processor was not started
+    // - or no lease documents matching the current feed processor instance's lease prefix could be found
+    val estimatedLag = processor.get.getEstimatedLag()
+    estimatedLag
+      .head()
+      .map(lag => {
+        log.info(this, s"estimated lag is ${lag}")
+        lag.asScala.keys.foreach(key => {
+          val pk = key.split("_")(0)
+          val gaugeToken = lags.getOrElseUpdate(pk, createLagToken(pk))
+          MetricEmitter.emitGaugeMetric(gaugeToken, lag.asScala(key).longValue())
+        })
+      })
+  }
+
+  private def createLagToken(partitionKey: String) = {
+    LogMarkerToken("cosmosdb", "change_feed", "lag", tags = Map("collection" -> "whisks", "pk" -> partitionKey))(
+      MeasurementUnit.none)
+  }
+
+  implicit class RxScalaObservableMono[T](observable: Mono[T]) {
+
+    /**
+     * Returns the head of the [[Mono]] in a [[scala.concurrent.Future]].
+     *
+     * @return the head result of the [[Mono]].
+     */
+    def head(): Future[T] = {
+      def toHandler[P](f: (P) => Unit): Consumer[P] = (t: P) => f(t)
+      val promise = Promise[T]()
+      observable.subscribe(toHandler(promise.success), toHandler(promise.failure))
+      promise.future
+    }
+  }
 }
 
 object ChangeFeedConsumer {
+  private val feedCounter =
+    LogMarkerToken("cosmosdb", "change_feed", "count", tags = Map("collection" -> "whisks"))(MeasurementUnit.none)
+
   def createCosmosClient(conInfo: ConnectionInfo): CosmosAsyncClient = {
     val clientBuilder = new CosmosClientBuilder()
       .endpoint(conInfo.endpoint)

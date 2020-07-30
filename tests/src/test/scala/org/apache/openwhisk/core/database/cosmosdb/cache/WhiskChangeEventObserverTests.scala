@@ -31,20 +31,6 @@ import scala.collection.immutable.Seq
 class WhiskChangeEventObserverTests extends FlatSpec with Matchers with StreamLogging {
   import WhiskChangeEventObserver.instanceId
 
-  behavior of "CosmosDB extract LSN from Session token"
-
-  it should "parse old session token" in {
-    WhiskChangeEventObserver.getSessionLsn("0:12345") shouldBe 12345
-  }
-
-  it should "parse new session token" in {
-    WhiskChangeEventObserver.getSessionLsn("0:-1#12345") shouldBe 12345
-  }
-
-  it should "parse new session token with multiple regional lsn" in {
-    WhiskChangeEventObserver.getSessionLsn("0:-1#12345#Region1=1#Region2=2") shouldBe 12345
-  }
-
   behavior of "CosmosDB feed events"
 
   it should "generate cache events" in {
