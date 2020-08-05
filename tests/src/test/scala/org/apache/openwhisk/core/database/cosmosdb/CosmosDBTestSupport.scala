@@ -94,8 +94,9 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
   override def afterAll(): Unit = {
     super.afterAll()
     if (!useExistingDB) {
+      println(s"Deleteing dbs ${dbsToDelete.map(_.getId)}")
       dbsToDelete.foreach { db =>
-        db.delete()
+        db.delete().block()
       }
     }
     client.close()
