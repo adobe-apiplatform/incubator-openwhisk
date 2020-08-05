@@ -36,6 +36,7 @@ case class CollectionResourceUsage(documentsSize: Option[ByteSize],
   def asString: String = {
     List(
       documentsSize.map(ds => s"documentSize: ${displaySize(ds)}"),
+      collectionSize.map(cs => s"collectionSize: ${displaySize(cs)}"),
       indexSize.map(is => s"indexSize: ${displaySize(is)}"),
       documentsCount.map(dc => s"documentsCount: $dc"),
       documentsSizeQuota.map(dq => s"collectionSizeQuota: ${displaySize(dq)}")).flatten.mkString(",")
@@ -54,12 +55,13 @@ object CollectionResourceUsage {
       quota <- responseHeaders.get(quotaHeader).map(headerValueToMap)
       usage <- responseHeaders.get(usageHeader).map(headerValueToMap)
     } yield {
+      //TODO: Cosmos 4.3.0 verify missing usage stats
       CollectionResourceUsage(
         usage.get("documentsSize").map(_.toLong).map(ByteSize(_, KB)),
-        usage.get("collectionSize").map(_.toLong).map(ByteSize(_, KB)),
+        usage.get("collections").map(_.toLong).map(ByteSize(_, KB)),
         usage.get("documentsCount").map(_.toLong),
         responseHeaders.get(indexHeader).map(_.toInt),
-        quota.get("collectionSize").map(_.toLong).map(ByteSize(_, KB)))
+        quota.get("collections").map(_.toLong).map(ByteSize(_, KB)))
     }
   }
 

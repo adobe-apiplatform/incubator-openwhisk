@@ -21,7 +21,7 @@ import java.io.Closeable
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import com.azure.cosmos.implementation.AsyncDocumentClient
+import com.azure.cosmos.CosmosAsyncClient
 import com.typesafe.config.ConfigFactory
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.core.ConfigKeys
@@ -34,7 +34,7 @@ import spray.json.RootJsonFormat
 
 import scala.reflect.ClassTag
 
-case class ClientHolder(client: AsyncDocumentClient) extends Closeable {
+case class ClientHolder(client: CosmosAsyncClient) extends Closeable {
   override def close(): Unit = client.close()
 }
 

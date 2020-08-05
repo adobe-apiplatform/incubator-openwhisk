@@ -19,19 +19,22 @@ package org.apache.openwhisk.core.database.cosmosdb
 
 import com.azure.cosmos.implementation.Database
 import java.util.ArrayList
+import com.azure.cosmos.CosmosAsyncDatabase
 import com.azure.cosmos.models.{SqlParameter, SqlQuerySpec}
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike}
 import pureconfig._
 import pureconfig.generic.auto._
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.database.test.behavior.ArtifactStoreTestUtil.storeAvailable
+import reactor.core.scala.publisher.SMono
+import reactor.core.scala.publisher.ScalaConverters._
 
-import scala.collection.JavaConverters._
+import scala.concurrent.duration._
 import scala.collection.mutable.ListBuffer
 import scala.util.{Random, Try}
 
 trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObservableImplicits {
-  private val dbsToDelete = ListBuffer[Database]()
+  private val dbsToDelete = ListBuffer[CosmosAsyncDatabase]()
 
   lazy val storeConfigTry = Try { loadConfigOrThrow[CosmosDBConfig](ConfigKeys.cosmosdb) }
   lazy val client = storeConfig.createClient()
@@ -54,25 +57,26 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
       println(s"Using existing database ${db.getId()}")
       db
     } else {
-      val databaseDefinition = new Database
-      databaseDefinition.setId(generateDBName())
-      val db = client.createDatabase(databaseDefinition, null).block().getResource
+      val dbId = generateDBName()
+      val db = client
+        .createDatabase(dbId)
+        .asScala
+        .map { r =>
+          client.getDatabase(dbId)
+        }
+        .block(10.seconds)
       dbsToDelete += db
-      println(s"Created database ${db.getId()}")
+      println(s"Created database ${dbId}")
       db
     }
   }
 
-  private def getOrCreateDatabase(): Database = {
+  private def getOrCreateDatabase(): CosmosAsyncDatabase = {
     client
-      .queryDatabases(querySpec(storeConfig.db), null)
-      .blockFirst()
-      .getResults()
+      .createDatabaseIfNotExists(storeConfig.db)
       .asScala
-      .headOption
-      .getOrElse {
-        client.createDatabase(newDatabase, null).block().getResource
-      }
+      .flatMap(r => SMono.just(client.getDatabase(r.getProperties.getId)))
+      .block()
   }
 
   protected def querySpec(id: String): SqlQuerySpec = {
@@ -90,7 +94,9 @@ trait CosmosDBTestSupport extends FlatSpecLike with BeforeAndAfterAll with RxObs
   override def afterAll(): Unit = {
     super.afterAll()
     if (!useExistingDB) {
-      dbsToDelete.foreach(db => client.deleteDatabase(db.getSelfLink, null).block().getResource)
+      dbsToDelete.foreach { db =>
+        db.delete()
+      }
     }
     client.close()
   }

@@ -83,6 +83,7 @@ dependencies {
     compile "io.zipkin.reporter2:zipkin-reporter:2.6.1"
 
     compile "com.azure:azure-cosmos:4.3.0"
+    compile "io.projectreactor:reactor-scala-extensions_${gradle.scala.depVersion}:0.7.1"
 
     compile "com.sksamuel.elastic4s:elastic4s-http_${gradle.scala.depVersion}:6.7.4"
 

@@ -18,7 +18,7 @@
 package org.apache.openwhisk.core.database.cosmosdb
 
 import akka.stream.ActorMaterializer
-import com.azure.cosmos.implementation.{AsyncDocumentClient, DocumentCollection}
+import com.azure.cosmos.CosmosAsyncClient
 import com.typesafe.config.ConfigFactory
 import common.{StreamLogging, WskActorSystem}
 import org.apache.openwhisk.core.entity.{
@@ -32,8 +32,7 @@ import org.junit.runner.RunWith
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
-
-import scala.collection.JavaConverters._
+import reactor.core.scala.publisher.ScalaConverters._
 import scala.concurrent.duration.DurationInt
 
 @RunWith(classOf[JUnitRunner])
@@ -54,9 +53,11 @@ class CosmosDBSupportTests
     val config: CosmosDBConfig = storeConfig.copy(db = testDb.getId())
 
     val indexedPaths1 = Set("/foo/?", "/bar/?")
-    val (_, coll) = new CosmosTest(config, client, newMapper(indexedPaths1)).initialize()
-    coll.getDefaultTimeToLive shouldBe -1
-    indexedPaths(coll) should contain theSameElementsAs indexedPaths1
+    val (db, coll) = new CosmosTest(config, client, newMapper(indexedPaths1)).initialize()
+    val props = db.queryContainers(querySpec(coll.getId)).asScala.head.block()
+    props.getDefaultTimeToLiveInSeconds shouldBe -1
+    val indexingPolicy = IndexingPolicy(props.getIndexingPolicy)
+    indexingPolicy.includedPaths.map(_.path) should contain theSameElementsAs indexedPaths1
   }
 
   it should "set ttl" in {
@@ -76,8 +77,9 @@ class CosmosDBSupportTests
 
     val testDb = createTestDB()
     val testConfig = cosmosDBConfig.copy(db = testDb.getId())
-    val coll = CosmosDBArtifactStoreProvider.makeArtifactStore[WhiskActivation](testConfig, None).collection
-    coll.getDefaultTimeToLive shouldBe 60.seconds.toSeconds
+    val store = CosmosDBArtifactStoreProvider.makeArtifactStore[WhiskActivation](testConfig, None)
+    val props = store.database.queryContainers(querySpec(store.collection.getId)).asScala.head.block()
+    props.getDefaultTimeToLiveInSeconds shouldBe 60.seconds.toSeconds
   }
 
   it should "not set ttl for WhiskEntity" in {
@@ -109,14 +111,11 @@ class CosmosDBSupportTests
     mapper
   }
 
-  private def indexedPaths(coll: DocumentCollection) =
-    coll.getIndexingPolicy.getIncludedPaths.asScala.map(_.getPath).toList
-
   protected def newTestIndexingPolicy(paths: Set[String]): IndexingPolicy =
     IndexingPolicy(includedPaths = paths.map(p => IncludedPath(p)))
 
   private class CosmosTest(override val config: CosmosDBConfig,
-                           override val client: AsyncDocumentClient,
+                           override val client: CosmosAsyncClient,
                            mapper: CosmosDBViewMapper)
       extends CosmosDBSupport {
     override protected def collName = "test"

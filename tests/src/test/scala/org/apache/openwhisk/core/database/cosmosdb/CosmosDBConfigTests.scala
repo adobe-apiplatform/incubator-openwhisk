@@ -127,7 +127,6 @@ class CosmosDBConfigTests extends FlatSpec with Matchers {
     cosmos.endpoint shouldBe "http://localhost"
     cosmos.key shouldBe "foo"
     cosmos.db shouldBe "openwhisk"
-    cosmos.throughput shouldBe 1000
 
     val policy = cosmos.connectionPolicy.asJava
     policy.isEndpointDiscoveryEnabled shouldBe true

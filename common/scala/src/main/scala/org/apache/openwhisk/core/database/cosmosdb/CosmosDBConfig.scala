@@ -19,14 +19,13 @@ package org.apache.openwhisk.core.database.cosmosdb
 import com.azure.cosmos.{
   ConnectionMode,
   ConsistencyLevel,
+  CosmosAsyncClient,
+  CosmosClientBuilder,
   DirectConnectionConfig,
   GatewayConnectionConfig,
   ThrottlingRetryOptions => JRetryOptions
 }
 import com.azure.cosmos.implementation.{ConnectionPolicy => JConnectionPolicy}
-import com.azure.cosmos.implementation.AsyncDocumentClient
-//import com.azure.data.cosmos.{ConnectionMode, ConsistencyLevel, ConnectionPolicy => JConnectionPolicy, RetryOptions => JRetryOptions}
-//import com.azure.data.cosmos.internal.AsyncDocumentClient
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigUtil.joinPath
 import org.apache.openwhisk.core.ConfigKeys
@@ -47,13 +46,23 @@ case class CosmosDBConfig(endpoint: String,
                           softDeleteTTL: Option[FiniteDuration],
                           recordUsageFrequency: Option[FiniteDuration]) {
 
-  def createClient(): AsyncDocumentClient = {
-    new AsyncDocumentClient.Builder()
-      .withServiceEndpoint(endpoint)
-      .withMasterKeyOrResourceToken(key)
-      .withConsistencyLevel(consistencyLevel)
-      .withConnectionPolicy(connectionPolicy.asJava)
-      .build()
+  def createClient(): CosmosAsyncClient = {
+    val b = new CosmosClientBuilder()
+      .endpoint(endpoint)
+      .key(key)
+      .consistencyLevel(consistencyLevel)
+      .multipleWriteRegionsEnabled(connectionPolicy.usingMultipleWriteLocations)
+      .preferredRegions(connectionPolicy.preferredLocations.asJava)
+      .throttlingRetryOptions(connectionPolicy.retryOptions.asJava)
+    if (connectionPolicy.connectionMode == ConnectionMode.GATEWAY) {
+      val config = new GatewayConnectionConfig()
+      config.setMaxConnectionPoolSize(connectionPolicy.maxPoolSize)
+      b.gatewayMode(config)
+    } else {
+      val config = new DirectConnectionConfig()
+      b.directMode(config)
+    }
+    b.buildAsyncClient()
   }
 }
 

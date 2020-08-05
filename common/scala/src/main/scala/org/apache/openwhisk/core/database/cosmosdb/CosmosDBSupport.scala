@@ -17,75 +17,71 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
-import com.azure.cosmos.implementation.{AsyncDocumentClient, Database, DocumentCollection, RequestOptions, Resource}
-import com.azure.cosmos.models.{FeedResponse, SqlParameter, SqlQuerySpec}
-//import com.azure.data.cosmos.internal.AsyncDocumentClient
-//import com.azure.data.cosmos.Resource
+import com.azure.cosmos.{CosmosAsyncClient, CosmosAsyncContainer, CosmosAsyncDatabase}
+import com.azure.cosmos.models.{
+  CosmosContainerProperties,
+  FeedResponse,
+  SqlParameter,
+  SqlQuerySpec,
+  ThroughputProperties
+}
+import reactor.core.scala.publisher.SMono
 import org.apache.openwhisk.common.Logging
+import reactor.core.scala.publisher.ScalaConverters._
 
 import scala.collection.JavaConverters._
 
-private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with CosmosDBUtil {
+private[cosmosdb] trait CosmosDBSupport extends CosmosDBUtil {
   protected def config: CosmosDBConfig
   protected def collName: String
-  protected def client: AsyncDocumentClient
+  protected def client: CosmosAsyncClient
   protected def viewMapper: CosmosDBViewMapper
 
-  def initialize()(implicit logging: Logging): (Database, DocumentCollection) = {
+  def initialize()(implicit logging: Logging): (CosmosAsyncDatabase, CosmosAsyncContainer) = {
     val db = getOrCreateDatabase()
     (db, getOrCreateCollection(db))
   }
 
-  private def getOrCreateDatabase()(implicit logging: Logging): Database = {
+  private def getOrCreateDatabase()(implicit logging: Logging): CosmosAsyncDatabase = {
     client
-      .queryDatabases(querySpec(config.db), null)
-      .blockingOnlyResult()
-      .getOrElse {
-        client.createDatabase(newDatabase, null).block().getResource
+      .createDatabaseIfNotExists(config.db)
+      .asScala
+      .flatMap(r => SMono.just(client.getDatabase(r.getProperties.getId)))
+      .block()
+  }
+
+  private def getOrCreateCollection(database: CosmosAsyncDatabase)(implicit logging: Logging) = {
+    val throughputProperties = ThroughputProperties.createManualThroughput(config.throughput)
+    val containerProperties = new CosmosContainerProperties(collName, viewMapper.partitionKeyDefn)
+    val ttl: Int = config.timeToLive.map(_.toSeconds.toInt).getOrElse(-1)
+    containerProperties.setDefaultTimeToLiveInSeconds(ttl)
+    containerProperties.setIndexingPolicy(viewMapper.indexingPolicy.asJava())
+    val container = database
+      .createContainerIfNotExists(containerProperties, throughputProperties)
+      .asScala
+      .flatMap { c =>
+        SMono.just(database.getContainer(c.getProperties.getId))
       }
-  }
+      .block()
 
-  private def getOrCreateCollection(database: Database)(implicit logging: Logging) = {
-    client
-      .queryCollections(database.getSelfLink, querySpec(collName), null)
-      .blockingOnlyResult()
-      .map { coll =>
-        val expectedIndexingPolicy = viewMapper.indexingPolicy
-        val existingIndexingPolicy = IndexingPolicy(coll.getIndexingPolicy)
-        if (!IndexingPolicy.isSame(expectedIndexingPolicy, existingIndexingPolicy)) {
-          logging.warn(
-            this,
-            s"Indexing policy for collection [$collName] found to be different." +
-              s"\nExpected - ${expectedIndexingPolicy.asJava()}" +
-              s"\nExisting - ${existingIndexingPolicy.asJava()}")
-        }
-        coll
-      }
-      .getOrElse {
-        client.createCollection(database.getSelfLink, newDatabaseCollection, dbOptions).block().getResource
-      }
-  }
-
-  private def newDatabaseCollection = {
-    val defn = new DocumentCollection
-    defn.setId(collName)
-    defn.setIndexingPolicy(viewMapper.indexingPolicy.asJava())
-    defn.setPartitionKey(viewMapper.partitionKeyDefn)
-    val ttl = config.timeToLive.map(_.toSeconds.toInt).getOrElse(-1)
-    defn.setDefaultTimeToLive(ttl)
-    defn
-  }
-
-  private def dbOptions = {
-    val opts = new RequestOptions
-    opts.setOfferThroughput(config.throughput)
-    opts
-  }
-
-  private def newDatabase = {
-    val databaseDefinition = new Database
-    databaseDefinition.setId(config.db)
-    databaseDefinition
+    //validate the indexing policy matches expected
+    val containerProps = database
+      .queryContainers(querySpec(collName))
+      .byPage()
+      .asScala
+      .head
+      .block()
+    require(containerProps.getResults.size == 1, s"container was not created ${collName}")
+    val existingIndexingPolicy = IndexingPolicy(containerProps.getResults.get(0).getIndexingPolicy)
+    val expectedIndexingPolicy = viewMapper.indexingPolicy
+    if (!IndexingPolicy.isSame(expectedIndexingPolicy, existingIndexingPolicy)) {
+      logging.warn(
+        this,
+        s"Indexing policy for collection [$collName] found to be different." +
+          s"\nExpected - ${expectedIndexingPolicy.asJava()}" +
+          s"\nExisting - ${existingIndexingPolicy}")
+    }
+    container
   }
 
   /**
@@ -94,5 +90,7 @@ private[cosmosdb] trait CosmosDBSupport extends RxObservableImplicits with Cosmo
   protected def querySpec(id: String) =
     new SqlQuerySpec("SELECT * FROM root r WHERE r.id=@id", Seq(new SqlParameter("@id", id)).asJava)
 
-  protected def asVector[T <: Resource](r: FeedResponse[T]): Vector[T] = r.getResults.asScala.toVector
+  protected def asVector[T](r: FeedResponse[T]): Vector[T] = {
+    r.getResults.asScala.toVector
+  }
 }
