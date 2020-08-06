@@ -17,6 +17,10 @@
 
 package org.apache.openwhisk.core.database.cosmosdb
 
+import org.junit.runner.RunWith
+import org.scalatest.junit.JUnitRunner
+
+@RunWith(classOf[JUnitRunner])
 class CosmosDBArtifactStoreLeakTests extends CosmosDBArtifactStoreTests {
 
   //NOTE: for some reason the leak checking is not failing the test when run in afterAll()!
