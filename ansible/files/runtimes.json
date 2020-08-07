@@ -15,34 +15,6 @@
     "runtimes": {
         "nodejs": [
             {
-                "kind": "nodejs:6",
-                "default": false,
-                "image": {
-                    "prefix": "openwhisk",
-                    "name": "nodejs6action",
-                    "tag": "nightly"
-                },
-                "deprecated": true,
-                "attached": {
-                    "attachmentName": "codefile",
-                    "attachmentType": "text/plain"
-                }
-            },
-            {
-                "kind": "nodejs:8",
-                "default": false,
-                "image": {
-                    "prefix": "openwhisk",
-                    "name": "action-nodejs-v8",
-                    "tag": "nightly"
-                },
-                "deprecated": true,
-                "attached": {
-                    "attachmentName": "codefile",
-                    "attachmentType": "text/plain"
-                }
-            },
-            {
                 "kind": "nodejs:10",
                 "default": true,
                 "image": {
@@ -57,8 +29,15 @@
                 },
                 "stemCells": [
                     {
-                        "count": 2,
-                        "memory": "256 MB"
+                        "initialCount": 2,
+                        "memory": "256 MB",
+                        "reactive": {
+                            "minCount": 1,
+                            "maxCount": 4,
+                            "ttl": "2 minutes",
+                            "threshold": 1,
+                            "increment": 1
+                        }
                     }
                 ]
             },
@@ -68,6 +47,20 @@
                 "image": {
                     "prefix": "openwhisk",
                     "name": "action-nodejs-v12",
+                    "tag": "nightly"
+                },
+                "deprecated": false,
+                "attached": {
+                    "attachmentName": "codefile",
+                    "attachmentType": "text/plain"
+                }
+            },
+            {
+                "kind": "nodejs:14",
+                "default": false,
+                "image": {
+                    "prefix": "openwhisk",
+                    "name": "action-nodejs-v14",
                     "tag": "nightly"
                 },
                 "deprecated": false,
