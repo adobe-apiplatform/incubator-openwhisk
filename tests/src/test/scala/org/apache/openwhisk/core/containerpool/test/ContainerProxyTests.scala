@@ -568,22 +568,8 @@ class ContainerProxyTests
 
   it should "resend a failed Run when it is first Run after Ready state" in within(timeout) {
     val noLogsAction = action.copy(limits = ActionLimits(logs = LogLimit(0.MB)))
-    val container = new TestContainer {
-      override def run(
-        parameters: JsObject,
-        environment: JsObject,
-        timeout: FiniteDuration,
-        concurrent: Int,
-        reschedule: Boolean = false)(implicit transid: TransactionId): Future[(Interval, ActivationResponse)] = {
-        atomicRunCount.incrementAndGet()
-        //every run after first fails
-        if (runCount > 1) {
-          Future.failed(ContainerHealthError(messageTransId, "intentional failure"))
-        } else {
-          Future.successful((runInterval, ActivationResponse.success()))
-        }
-      }
-    }
+    val runPromises = Seq(Promise[(Interval, ActivationResponse)](), Promise[(Interval, ActivationResponse)]())
+    val container = new TestContainer(runPromises = runPromises)
     val factory = createFactory(Future.successful(container))
     val acker = createAcker(noLogsAction)
     val store = createStore
@@ -606,6 +592,8 @@ class ContainerProxyTests
     machine ! Run(noLogsAction, message)
     expectMsg(Transition(machine, Uninitialized, Running))
     expectMsg(ContainerStarted)
+    //run the first successfully
+    runPromises(0).success(runInterval, ActivationResponse.success())
     expectWarmed(invocationNamespace.name, noLogsAction)
     expectMsg(Transition(machine, Running, Ready))
 
@@ -615,6 +603,8 @@ class ContainerProxyTests
     machine ! failingRun
     machine ! runAfterFail //will be buffered first, and then retried
     expectMsg(Transition(machine, Ready, Running))
+    //run the second as failure
+    runPromises(1).failure(ContainerHealthError(messageTransId, "intentional failure"))
     //on failure, buffered are resent first
     expectMsg(runAfterFail)
     //resend the first run to parent, and start removal process
