@@ -43,6 +43,8 @@ import org.apache.openwhisk.http.Messages._
 import org.apache.openwhisk.core.entitlement.Resource
 import org.apache.openwhisk.core.entitlement.Collection
 import org.apache.openwhisk.core.loadBalancer.LoadBalancerException
+import pureconfig._
+import org.apache.openwhisk.core.ConfigKeys
 
 /**
  * A singleton object which defines the properties that must be present in a configuration
@@ -101,6 +103,10 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
 
   /** Database service to get activations. */
   protected val activationStore: ActivationStore
+
+  /** Config flag for Execute Only for Actions in Shared Packages */
+  protected def executeOnly =
+    loadConfigOrThrow[Boolean](ConfigKeys.sharedPackageExecuteOnly)
 
   /** Entity normalizer to JSON object. */
   import RestApiCommons.emptyEntityToJsObject
@@ -330,6 +336,56 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
     deleteEntity(WhiskAction, entityStore, entityName.toDocId, (a: WhiskAction) => Future.successful({}))
   }
 
+  /**GET --save which retrieves all source code for an entity **/
+  private def getEntityWithSourceCode(entityName: FullyQualifiedEntityName, env: Option[Parameters])(
+    implicit transid: TransactionId) = {
+    getEntity(WhiskAction.resolveActionAndMergeParameters(entityStore, entityName), Some { action: WhiskAction =>
+      val mergedAction = env map {
+        action inherit _
+      } getOrElse action
+      complete(OK, mergedAction)
+    })
+  }
+
+  /**Standard GET which just retrieves metadata**/
+  private def getEntityMetaData(entityName: FullyQualifiedEntityName, env: Option[Parameters])(
+    implicit transid: TransactionId) = {
+    getEntity(WhiskActionMetaData.resolveActionAndMergeParameters(entityStore, entityName), Some {
+      action: WhiskActionMetaData =>
+        val mergedAction = env map {
+          action inherit _
+        } getOrElse action
+        complete(OK, mergedAction)
+    })
+  }
+
+  /** Checks for package binding case. we don't want to allow get for a package binding in shared package */
+  private def fetchEntity(entityName: FullyQualifiedEntityName, env: Option[Parameters], code: Boolean)(
+    implicit transid: TransactionId) = {
+    if (entityName.path.defaultPackage) {
+      if (code) {
+        getEntityWithSourceCode(entityName, env)
+      } else {
+        getEntityMetaData(entityName, env)
+      }
+    } else {
+      getEntity(
+        WhiskPackage.resolveBinding(entityStore, entityName.path.toDocId, mergeParameters = true),
+        Some { pkg: WhiskPackage =>
+          val originalPackageLocation = pkg.fullyQualifiedName(withVersion = false).namespace
+          if (executeOnly && originalPackageLocation != entityName.namespace) {
+            terminate(Forbidden, forbiddenGetActionBinding(entityName.toDocId.asString))
+          } else {
+            if (code) {
+              getEntityWithSourceCode(entityName, env)
+            } else {
+              getEntityMetaData(entityName, env)
+            }
+          }
+        })
+    }
+  }
+
   /**
    * Gets action. The action name is prefixed with the namespace to create the primary index key.
    *
@@ -341,22 +397,12 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
   override def fetch(user: Identity, entityName: FullyQualifiedEntityName, env: Option[Parameters])(
     implicit transid: TransactionId) = {
     parameter('code ? true) { code =>
-      code match {
-        case true =>
-          getEntity(WhiskAction.resolveActionAndMergeParameters(entityStore, entityName), Some { action: WhiskAction =>
-            val mergedAction = env map {
-              action inherit _
-            } getOrElse action
-            complete(OK, mergedAction)
-          })
-        case false =>
-          getEntity(WhiskActionMetaData.resolveActionAndMergeParameters(entityStore, entityName), Some {
-            action: WhiskActionMetaData =>
-              val mergedAction = env map {
-                action inherit _
-              } getOrElse action
-              complete(OK, mergedAction)
-          })
+      //check if execute only is enabled, and if there is a discrepancy between the current user's namespace
+      //and that of the entity we are trying to fetch
+      if (executeOnly && user.namespace.name != entityName.namespace) {
+        terminate(Forbidden, forbiddenGetAction(entityName.path.asString))
+      } else {
+        fetchEntity(entityName, env, code)
       }
     }
   }
