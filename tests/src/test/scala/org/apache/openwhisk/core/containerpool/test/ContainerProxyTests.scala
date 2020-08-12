@@ -84,7 +84,7 @@ class ContainerProxyTests
   val invocationNamespace = EntityName("invocationSpace")
   val action = ExecutableWhiskAction(EntityPath("actionSpace"), EntityName("actionName"), exec)
 
-  val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean)
+  val concurrencyEnabled = Option(WhiskProperties.getProperty("whisk.action.concurrency", "false")).exists(_.toBoolean)
   val testConcurrencyLimit = if (concurrencyEnabled) ConcurrencyLimit(2) else ConcurrencyLimit(1)
   val concurrentAction = ExecutableWhiskAction(
     EntityPath("actionSpace"),
@@ -788,7 +788,7 @@ class ContainerProxyTests
   //without waiting for the completion of the previous Run message (signaled by NeedWork message)
   //Multiple messages can only be handled after Warming.
   it should "stay in Running state if others are still running" in within(timeout) {
-    assume(Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean))
+    assume(concurrencyEnabled)
 
     val initPromise = Promise[Interval]()
     val runPromises = Seq(
@@ -909,7 +909,7 @@ class ContainerProxyTests
   }
 
   it should "not destroy on failure during Removing state when concurrent activations are in flight" in {
-    assume(Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean))
+    assume(concurrencyEnabled)
 
     val initPromise = Promise[Interval]()
     val runPromises = Seq(Promise[(Interval, ActivationResponse)](), Promise[(Interval, ActivationResponse)]())
@@ -979,7 +979,7 @@ class ContainerProxyTests
   }
 
   it should "not destroy on failure during Running state when concurrent activations are in flight" in {
-    assume(Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean))
+    assume(concurrencyEnabled)
 
     val initPromise = Promise[Interval]()
     val runPromises = Seq(Promise[(Interval, ActivationResponse)](), Promise[(Interval, ActivationResponse)]())
