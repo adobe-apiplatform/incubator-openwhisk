@@ -126,6 +126,7 @@ class ContainerProxyTests
     blocking = false,
     content = Some(activationArguments),
     initArgs = Set("ENV_VAR"))
+  def uniqueMessage = message.copy(activationId = ActivationId.generate())
 
   /*
    * Helpers for assertions and actor lifecycles
@@ -1015,10 +1016,11 @@ class ContainerProxyTests
 
     //fail the first run
     runPromises(0).success(runInterval, ActivationResponse.whiskError("intentional failure in test"))
-    //succeed the second run
-    runPromises(1).success(runInterval, ActivationResponse.success())
     //go to Removing state when a failure happens while others are in flight
     expectMsg(Transition(machine, Running, Removing))
+    //succeed the second run
+    runPromises(1).success(runInterval, ActivationResponse.success())
+
     expectMsg(RescheduleJob)
     awaitAssert {
       factory.calls should have size 1
@@ -2161,6 +2163,8 @@ class ContainerProxyTests
       environment.fields("action_name") shouldBe message.action.qualifiedNameWithLeadingSlash.toJson
       environment.fields("action_version") shouldBe message.action.version.toJson
       environment.fields("activation_id") shouldBe message.activationId.toJson
+      //println(s"running ${environment.fields("activation_id")}")
+      //Thread.sleep(100)
       environment.fields("transaction_id") shouldBe transid.id.toJson
       val authEnvironment = environment.fields.filterKeys(message.user.authkey.toEnvironment.fields.contains).toMap
       if (apiKeyMustBePresent) {
