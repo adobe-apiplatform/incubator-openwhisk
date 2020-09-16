@@ -563,6 +563,8 @@ class CosmosDBArtifactStore[DocumentAbstraction <: DocumentSerializer](protected
 
   private def newQueryOptions() = {
     val options = new CosmosQueryRequestOptions()
+    //default for queryMetricsEnabled as of azure 4.4 sdk is true, reset to false:
+    options.setQueryMetricsEnabled(false)
     options
   }
 
