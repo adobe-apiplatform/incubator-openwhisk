@@ -150,7 +150,7 @@ class CacheInvalidatorTests
     //when db config is broken, we expect reactor.core.Exceptions$ReactiveException (a non-public RuntimeException)
     // in case of database configurations broken the CosmosAsyncClient throws AssertionError
     // as it assert for DB initialization completion.
-    start.failed.futureValue.getCause shouldBe an[AssertionError]
+    start.failed.futureValue shouldBe an[RuntimeException]
   }
 
   private def randomString() = Random.alphanumeric.take(5).mkString
