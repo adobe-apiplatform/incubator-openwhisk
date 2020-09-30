@@ -52,7 +52,7 @@ class Fabric8ClientTests
       false,
       None,
       configMap,
-      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000)),
+      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000, None)),
       false,
       Some(Map("POD_UID" -> "metadata.uid")),
       None)

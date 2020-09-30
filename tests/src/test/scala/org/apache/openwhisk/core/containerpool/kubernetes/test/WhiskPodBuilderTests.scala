@@ -31,6 +31,7 @@ import org.apache.openwhisk.common.{ConfigMapValue, TransactionId}
 import org.apache.openwhisk.core.containerpool.kubernetes.{
   KubernetesClientConfig,
   KubernetesClientTimeoutConfig,
+  KubernetesCpuLimitScalingConfig,
   KubernetesCpuScalingConfig,
   KubernetesEphemeralStorageConfig,
   KubernetesInvokerNodeAffinity,
@@ -54,6 +55,8 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
 
   behavior of "WhiskPodBuilder"
 
+  val scalingConfig = KubernetesCpuScalingConfig(300, 3.MB, 1000, None)
+
   def config(configMap: Option[ConfigMapValue] = None, affinity: Option[KubernetesInvokerNodeAffinity] = None) =
     KubernetesClientConfig(
       KubernetesClientTimeoutConfig(1.seconds, 2.seconds),
@@ -61,7 +64,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       false,
       None,
       configMap,
-      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000)),
+      Some(scalingConfig),
       false,
       Some(Map("POD_UID" -> "metadata.uid")),
       None)
@@ -78,7 +81,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       true,
       None,
       None,
-      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000)),
+      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000, Some(KubernetesCpuLimitScalingConfig(2, 10)))),
       false,
       None,
       None)
@@ -88,21 +91,23 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
     withClue(Serialization.asYaml(pod)) {
       val c = getActionContainer(pod)
       //min cpu is: config.millicpus
-      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("300m")
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("3000m")
     }
 
     val (pod2, _) = builder.buildPodSpec(name, testImage, 15.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config)
     withClue(Serialization.asYaml(pod2)) {
       val c = getActionContainer(pod2)
       //max cpu is: config.maxMillicpus
-      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("1000m")
+      c.getResources.getRequests.asScala.get("cpu").map(_.getAmount) shouldBe Some("1000m")
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("6000m")
     }
 
     val (pod3, _) = builder.buildPodSpec(name, testImage, 7.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config)
     withClue(Serialization.asYaml(pod3)) {
       val c = getActionContainer(pod3)
       //scaled cpu is: action mem/config.mem x config.maxMillicpus
-      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("600m")
+      c.getResources.getRequests.asScala.get("cpu").map(_.getAmount) shouldBe Some("600m")
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("5400m")
     }
 
     val config2 = KubernetesClientConfig(
@@ -119,6 +124,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
     withClue(Serialization.asYaml(pod4)) {
       val c = getActionContainer(pod4)
       //if scaling config is not provided, no cpu resources are specified
+      c.getResources.getRequests.asScala.get("cpu").map(_.getAmount) shouldBe None
       c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe None
     }
 
@@ -130,7 +136,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       true,
       None,
       None,
-      Some(KubernetesCpuScalingConfig(300, 3.MB, 1000)),
+      Some(scalingConfig),
       false,
       None,
       Some(KubernetesEphemeralStorageConfig(1.GB)))
@@ -223,7 +229,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
         new EnvVar("POD_UID", null, new EnvVarSource(null, new ObjectFieldSelector(null, "metadata.uid"), null, null))))
 
       c.getResources.getLimits.asScala.get("memory").map(_.getAmount) shouldBe Some("10Mi")
-      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe Some("900m")
+      c.getResources.getLimits.asScala.get("cpu").map(_.getAmount) shouldBe None //Some("900m")
       c.getSecurityContext.getCapabilities.getDrop.asScala should contain allOf ("NET_RAW", "NET_ADMIN")
       c.getPorts.asScala.find(_.getName == "action").map(_.getContainerPort) shouldBe Some(8080)
       c.getImage shouldBe testImage

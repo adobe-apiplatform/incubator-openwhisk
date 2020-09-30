@@ -103,9 +103,16 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient, config: KubernetesClie
     } else specBuilder.addNewContainer()
 
     //if cpu scaling is enabled, calculate cpu from memory, 100m per 256Mi, min is 100m(.1cpu), max is 10000 (10cpu)
-    val cpu = config.cpuScaling
-      .map(cpuConfig => Map("cpu" -> new Quantity(calculateCpu(cpuConfig, memory) + "m")))
-      .getOrElse(Map.empty)
+    val (cpuRequests: Map[String, Quantity], cpuLimits: Map[String, Quantity]) = config.cpuScaling
+      .map { cpuConfig =>
+        val (cpuReq, cpuLimits) = calculateCpu(cpuConfig, memory)
+        val calculatedCpuRequests = Map("cpu" -> new Quantity(cpuReq + "m"))
+        val calculatedCpuLimits = cpuLimits
+          .map(limit => Map("cpu" -> new Quantity(limit + "m")))
+          .getOrElse(Map.empty)
+        (calculatedCpuRequests, calculatedCpuLimits)
+      }
+      .getOrElse(Map.empty -> Map.empty)
 
     val diskLimit = config.ephemeralStorage
       .map(diskConfig => Map("ephemeral-storage" -> new Quantity(diskConfig.limit.toMB + "Mi")))
@@ -116,8 +123,8 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient, config: KubernetesClie
     containerBuilder
       .withNewResources()
       //explicitly set requests and limits to same values
-      .withLimits((Map("memory" -> new Quantity(memory.toMB + "Mi")) ++ cpu ++ diskLimit).asJava)
-      .withRequests((Map("memory" -> new Quantity(memory.toMB + "Mi")) ++ cpu ++ diskLimit).asJava)
+      .withLimits((Map("memory" -> new Quantity(memory.toMB + "Mi")) ++ cpuLimits ++ diskLimit).asJava)
+      .withRequests((Map("memory" -> new Quantity(memory.toMB + "Mi")) ++ cpuRequests ++ diskLimit).asJava)
       .endResources()
       .withName("user-action")
       .withImage(image)
@@ -156,11 +163,17 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient, config: KubernetesClie
     (pod, pdb)
   }
 
-  def calculateCpu(c: KubernetesCpuScalingConfig, memory: ByteSize): Int = {
+  def calculateCpu(c: KubernetesCpuScalingConfig, memory: ByteSize): (Int, Option[Int]) = {
     val cpuPerMemorySegment = c.millicpus
     val cpuMin = c.millicpus
     val cpuMax = c.maxMillicpus
-    math.min(math.max((memory.toMB / c.memory.toMB) * cpuPerMemorySegment, cpuMin), cpuMax).toInt
+    val memorySegments = memory.toMB / c.memory.toMB
+    val cpu = math.min(math.max(memorySegments * cpuPerMemorySegment, cpuMin), cpuMax).toInt
+
+    val cpuLimit = c.cpuLimitScaling.map { limitConfig =>
+      (math.max(limitConfig.minScalingFactor, limitConfig.maxScalingFactor - math.max(memorySegments - 1, 0)) * cpu).toInt
+    }
+    cpu -> cpuLimit
   }
 
   private def loadPodSpec(bytes: Array[Byte]): Pod = {
