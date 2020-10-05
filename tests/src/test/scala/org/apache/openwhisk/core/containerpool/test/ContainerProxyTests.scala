@@ -1919,7 +1919,7 @@ class ContainerProxyTests
   it should "send back a Run message which got sent before the container decided to remove itself" in within(timeout) {
     val destroyPromise = Promise[Unit]
     val container = new TestContainer {
-      override def destroy()(implicit transid: TransactionId): Future[Unit] = {
+      override def destroy(checkErrors: Boolean)(implicit transid: TransactionId): Future[Unit] = {
         destroyCount += 1
         destroyPromise.future
       }
@@ -2104,7 +2104,7 @@ class ContainerProxyTests
       httpConnection should be('defined)
       r
     }
-    override def destroy()(implicit transid: TransactionId): Future[Unit] = {
+    override def destroy(checkErrors: Boolean = false)(implicit transid: TransactionId): Future[Unit] = {
       destroyCount += 1
       super.destroy()
     }

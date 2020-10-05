@@ -68,7 +68,7 @@ class YARNTask(override protected val id: ContainerId,
   }
 
   /** Completely destroys this instance of the container. */
-  override def destroy()(implicit transid: TransactionId): Future[Unit] = {
+  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId): Future[Unit] = {
 
     implicit val timeout: Timeout = Timeout(containerRemoveTimeoutMS.milliseconds)
     ask(yarnComponentActor, RemoveContainer(component_instance_name)).mapTo[Unit]

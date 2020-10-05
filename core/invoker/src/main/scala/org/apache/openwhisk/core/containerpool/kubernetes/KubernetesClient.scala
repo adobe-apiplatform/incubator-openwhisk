@@ -85,6 +85,11 @@ case class KubernetesEphemeralStorageConfig(limit: ByteSize)
 case class KubernetesCpuLimitScalingConfig(minScalingFactor: Int, maxScalingFactor: Int)
 
 /**
+ * Configuration for termination status polling - pod delete won't occur until the termination status is collected
+ */
+case class KubernetesTerminationStatusCheckConfig(period: FiniteDuration, timeout: FiniteDuration)
+
+/**
  * Exception to indicate a pod took too long to become ready.
  */
 case class KubernetesPodReadyTimeoutException(timeout: FiniteDuration)
@@ -114,7 +119,8 @@ case class KubernetesClientConfig(timeouts: KubernetesClientTimeoutConfig,
                                   cpuScaling: Option[KubernetesCpuScalingConfig],
                                   pdbEnabled: Boolean,
                                   fieldRefEnvironment: Option[Map[String, String]],
-                                  ephemeralStorage: Option[KubernetesEphemeralStorageConfig])
+                                  ephemeralStorage: Option[KubernetesEphemeralStorageConfig],
+                                  terminationStatusPolling: KubernetesTerminationStatusCheckConfig)
 
 /**
  * Serves as an interface to the Kubernetes API by proxying its REST API and/or invoking the kubectl CLI.
@@ -190,22 +196,7 @@ class KubernetesClient(
           .recoverWith {
             case e =>
               transid.failed(this, start, s"Failed create pod for '$name': ${e.getClass} - ${e.getMessage}", ErrorLevel)
-              //log pod events to diagnose pod readiness failures
-              val podEvents = kubeRestClient.events
-                .inNamespace(namespace)
-                .withField("involvedObject.name", name)
-                .list()
-                .getItems
-                .asScala
-              if (podEvents.isEmpty) {
-                log.info(this, s"No pod events for failed pod '$name'")
-              } else {
-                podEvents.foreach { podEvent =>
-                  log.info(
-                    this,
-                    s"Pod event for failed pod '$name' ${podEvent.getLastTimestamp}: ${podEvent.getMessage}")
-                }
-              }
+              logPodEvents(namespace, name, true);
               Future.failed(e)
           }
       }
@@ -282,6 +273,105 @@ class KubernetesClient(
       }
   }
 
+  private def logPodEvents(namespace: String, name: String, startFailure: Boolean)(
+    implicit tid: TransactionId): Future[Unit] = {
+
+    //for startup failures, we only log events; for termination status (non-startup failures), we get the pod state as well
+    val containers = if (!startFailure) {
+      //logging the container statuses will wait till the terminal state is available,
+      // so events should include terminating details in that case
+      logPodContainerStatuses(namespace, name)
+        .recover {
+          case t: Throwable =>
+            val stackTrace = ExceptionUtils.getStackTrace(t)
+            log.error(this, s"Failed to log pod container state $t  $stackTrace")
+        }
+    } else {
+      Future.successful({})
+    }
+    containers
+      .flatMap { _ =>
+        log.debug(this, s"collecting events for pod $name")
+        Future {
+          //log pod events to diagnose pod readiness failures
+          val podEvents = kubeRestClient.events
+            .inNamespace(namespace)
+            .withField("involvedObject.name", name)
+            .list()
+            .getItems
+            .asScala
+          val failureMsg = if (startFailure) "starting" else "running"
+          if (podEvents.isEmpty) {
+            log.info(this, s"No pod events for failed ${failureMsg} pod '$name'")
+          } else {
+            podEvents.foreach { podEvent =>
+              val eventTimestamp =
+                if (podEvent.getLastTimestamp == null) "<no timestamp>" else podEvent.getLastTimestamp
+              log.info(this, s"Pod event for ${failureMsg} pod '$name' $eventTimestamp: ${podEvent.getMessage}")
+            }
+          }
+        }
+      }
+      .recover {
+        case t: Throwable =>
+          val stackTrace = ExceptionUtils.getStackTrace(t)
+          log.error(this, s"Failed to log pod events $t  $stackTrace")
+      }
+  }
+
+  private def logPodContainerStatuses(
+    namespace: String,
+    name: String,
+    tries: Int = 0,
+    deadlineOpt: Option[Deadline] = None)(implicit tid: TransactionId): Future[Unit] = {
+    //wait to fetch container statuses, so that we allow time for propagation by k8s
+    val nextTries = tries + 1
+    val deadline = deadlineOpt.getOrElse(config.terminationStatusPolling.timeout.fromNow)
+    after(config.terminationStatusPolling.period, scheduler) {
+      log.debug(this, s"collecting container statuses for pod $name")
+      val podState = kubeRestClient
+        .pods()
+        .inNamespace(namespace)
+        .withName(name)
+
+      /** want to show something like this in logs (from `kubectl get pod`):
+       * Last State:     Terminated
+       * Reason:       Error
+       * Exit Code:    137
+       * Started:      Thu, 01 Oct 2020 18:09:37 -0400
+       * Finished:     Thu, 01 Oct 2020 20:48:24 -0400
+       * Ready:          True
+       * Restart Count:  1
+       */
+      //if no terminated containers, wait and try again
+
+      Future.successful(podState.get().getStatus.getContainerStatuses.asScala)
+    }.flatMap { statuses =>
+      if (statuses.exists(_.getLastState.getTerminated != null)) {
+        Future {
+          statuses.foreach { c =>
+            log.info(this, s"Pod $name container ${c.getName} status ${c.toString}")
+            if (c.getLastState.getTerminated != null) {
+              log.info(
+                this,
+                s"Pod $name container ${c.getName} last terminated: exitCode=${c.getLastState.getTerminated.getExitCode}," +
+                  s" reason=${c.getLastState.getTerminated.getReason}," +
+                  s" message=${c.getLastState.getTerminated.getMessage}")
+            }
+          }
+        }
+      } else {
+        if (deadline.isOverdue()) {
+          Future.successful(log.info(
+            this,
+            s"no terminated containers after ${nextTries} tries; exceeded deadline ${config.terminationStatusPolling.timeout}"))
+        } else {
+          log.debug(this, s"no terminated containers after ${nextTries} tries; will try again...")
+          logPodContainerStatuses(namespace, name, nextTries, Some(deadline))
+        }
+      }
+    }
+  }
   // suspend is a no-op with the basic KubernetesClient
   def suspend(container: KubernetesContainer)(implicit transid: TransactionId): Future[Unit] = Future.successful({})
 
@@ -355,6 +445,10 @@ class KubernetesClient(
     } catch {
       case e: Throwable => Future.failed(e)
     }
+
+  def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId) = {
+    logPodEvents(kubeRestClient.getNamespace, container.id.asString, false)
+  }
 }
 object KubernetesClient {
 
@@ -397,6 +491,9 @@ trait KubernetesApi {
     implicit transid: TransactionId): Source[TypedLogLine, Any]
 
   def addLabel(container: KubernetesContainer, labels: Map[String, String]): Future[Unit]
+
+  def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId): Future[Unit]
+
 }
 
 object KubernetesRestLogSourceStage {

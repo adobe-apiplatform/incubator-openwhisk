@@ -210,7 +210,7 @@ class MesosTask(override protected val id: ContainerId,
   }
 
   /** Completely destroys this instance of the container. */
-  override def destroy()(implicit transid: TransactionId): Future[Unit] = {
+  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId): Future[Unit] = {
     MesosTask.destroy(mesosClientActor, mesosConfig, taskId)
   }
 

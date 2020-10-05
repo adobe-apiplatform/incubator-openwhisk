@@ -105,7 +105,7 @@ trait Container {
   def logs(limit: ByteSize, waitForSentinel: Boolean)(implicit transid: TransactionId): Source[ByteString, Any]
 
   /** Completely destroys this instance of the container. */
-  def destroy()(implicit transid: TransactionId): Future[Unit] = {
+  def destroy(checkErrors: Boolean = false)(implicit transid: TransactionId): Future[Unit] = {
     closeConnections(httpConnection)
   }
 
@@ -215,7 +215,14 @@ trait Container {
     }
     http
       .post(path, body, retry, reschedule)
+//      .recoverWith {
+//        case t: Throwable =>
+//          logging.error(this, "failed in http.post")
+//          //wrap exception in ContainerCallException to bubble the transaction id along with the failure
+//          Future.failed(ContainerCallException(transid, t))
+//      }
       .map { response =>
+//        logging.error(this, "finished in http.post")
         val finished = Instant.now()
         RunResult(Interval(started, finished), response)
       }

@@ -237,5 +237,9 @@ object KubernetesClientTests {
     override def addLabel(container: KubernetesContainer, labels: Map[String, String]): Future[Unit] = {
       Future.successful({})
     }
+
+    override def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId): Future[Unit] = {
+      Future.successful({})
+    }
   }
 }

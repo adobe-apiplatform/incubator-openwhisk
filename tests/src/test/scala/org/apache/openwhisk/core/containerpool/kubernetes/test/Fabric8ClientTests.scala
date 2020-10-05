@@ -55,7 +55,8 @@ class Fabric8ClientTests
       Some(KubernetesCpuScalingConfig(300, 3.MB, 1000, None)),
       false,
       Some(Map("POD_UID" -> "metadata.uid")),
-      None)
+      None,
+      KubernetesTerminationStatusCheckConfig(2.seconds, 20.seconds))
 
   it should "fail activation on cold start when apiserver fails" in {
 

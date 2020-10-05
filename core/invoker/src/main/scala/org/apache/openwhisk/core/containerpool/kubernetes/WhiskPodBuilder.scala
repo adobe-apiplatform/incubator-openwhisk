@@ -133,6 +133,8 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient, config: KubernetesClie
       .withContainerPort(8080)
       .withName("action")
       .endPort()
+      //assumes there is no termination message specifically generated, so inclue the last log line as the message
+      .withTerminationMessagePolicy("FallbackToLogsOnError")
 
     //If any existing context entry is present then "update" it else add new
     containerBuilder

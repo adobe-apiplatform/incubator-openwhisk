@@ -35,6 +35,7 @@ import org.apache.openwhisk.core.containerpool.kubernetes.{
   KubernetesCpuScalingConfig,
   KubernetesEphemeralStorageConfig,
   KubernetesInvokerNodeAffinity,
+  KubernetesTerminationStatusCheckConfig,
   WhiskPodBuilder
 }
 import org.apache.openwhisk.core.entity.size._
@@ -67,7 +68,8 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       Some(scalingConfig),
       false,
       Some(Map("POD_UID" -> "metadata.uid")),
-      None)
+      None,
+      KubernetesTerminationStatusCheckConfig(2.seconds, 20.seconds))
 
   it should "build a new pod" in {
     val c = config()
@@ -84,7 +86,8 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       Some(KubernetesCpuScalingConfig(300, 3.MB, 1000, Some(KubernetesCpuLimitScalingConfig(2, 10)))),
       false,
       None,
-      None)
+      None,
+      KubernetesTerminationStatusCheckConfig(2.seconds, 20.seconds))
     val builder = new WhiskPodBuilder(kubeClient, config)
 
     val (pod, _) = builder.buildPodSpec(name, testImage, 2.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config)
@@ -119,7 +122,8 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       None,
       false,
       None,
-      None)
+      None,
+      KubernetesTerminationStatusCheckConfig(2.seconds, 20.seconds))
     val (pod4, _) = builder.buildPodSpec(name, testImage, 7.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config2)
     withClue(Serialization.asYaml(pod4)) {
       val c = getActionContainer(pod4)
@@ -139,7 +143,8 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       Some(scalingConfig),
       false,
       None,
-      Some(KubernetesEphemeralStorageConfig(1.GB)))
+      Some(KubernetesEphemeralStorageConfig(1.GB)),
+      KubernetesTerminationStatusCheckConfig(2.seconds, 20.seconds))
     val builder = new WhiskPodBuilder(kubeClient, config)
 
     val (pod, _) = builder.buildPodSpec(name, testImage, 2.MB, Map("foo" -> "bar"), Map("fooL" -> "barV"), config)

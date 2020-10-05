@@ -380,9 +380,9 @@ class ContainerProxy(factory: (TransactionId,
     case Event(Remove, data: PreWarmedData) => destroyContainer(data, false)
 
     // prewarm container failed
-    case Event(_: FailureMessage, data: PreWarmedData) =>
+    case Event(f: FailureMessage, data: PreWarmedData) =>
       MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_CONTAINER_HEALTH_FAILED_PREWARM)
-      destroyContainer(data, true)
+      destroyContainer(data, true, cause = Some(f.cause))
   }
 
   when(Running) {
@@ -455,12 +455,13 @@ class ContainerProxy(factory: (TransactionId,
         .getOrElse(data)
       rescheduleJob = true
       rejectBuffered()
-      destroyContainer(newData, true)
+      destroyContainer(newData, true, cause = Some(e))
 
     // Failed after /init (the first run failed) on prewarmed or cold start
     // - container will be destroyed
     // - buffered will be aborted (if init fails, we assume it will always fail)
     case Event(f: FailureMessage, data: PreWarmedData) =>
+      implicit val tid: TransactionId = getTidFromCause(f.cause)
       logging.error(
         this,
         s"Failed during init of cold container ${data.getContainer}, queued activations will be aborted.")
@@ -468,21 +469,22 @@ class ContainerProxy(factory: (TransactionId,
       activeCount -= 1
       //reuse an existing init failure for any buffered activations that will be aborted
       val r = f.cause match {
-        case ActivationUnsuccessfulError(r) => Some(r.response)
-        case _                              => None
+        case ActivationUnsuccessfulError(r, _) => Some(r.response)
+        case _                                 => None
       }
-      destroyContainer(data, true, true, r)
+      destroyContainer(data, true, true, r, cause = Some(f.cause))
 
     // Failed for a subsequent /run
     // - container will be destroyed
     // - buffered will be resent (at least 1 has completed, so others are given a chance to complete)
-    case Event(_: FailureMessage, data: WarmedData) =>
+    case Event(f: FailureMessage, data: WarmedData) =>
+      implicit val tid: TransactionId = getTidFromCause(f.cause)
       logging.error(
         this,
         s"Failed during use of warm container ${data.getContainer}, queued activations will be resent.")
       activeCount -= 1
       if (activeCount == 0) {
-        destroyContainer(data, true)
+        destroyContainer(data, true, cause = Some(f.cause))
       } else {
         //signal that this container is going away (but don't remove it yet...)
         rescheduleJob = true
@@ -521,14 +523,15 @@ class ContainerProxy(factory: (TransactionId,
     case Event(Remove, data: WarmedData) => destroyContainer(data, true)
 
     // warm container failed
-    case Event(_: FailureMessage, data: WarmedData) =>
-      destroyContainer(data, true)
+    case Event(f: FailureMessage, data: WarmedData) =>
+      destroyContainer(data, true, cause = Some(f.cause))
   }
 
   when(Pausing) {
-    case Event(ContainerPaused, data: WarmedData)   => goto(Paused)
-    case Event(_: FailureMessage, data: WarmedData) => destroyContainer(data, true)
-    case _                                          => delay
+    case Event(ContainerPaused, data: WarmedData) => goto(Paused)
+    case Event(f: FailureMessage, data: WarmedData) =>
+      destroyContainer(data, true, cause = Some(f.cause))
+    case _ => delay
   }
 
   when(Paused, stateTimeout = unusedTimeout) {
@@ -575,11 +578,11 @@ class ContainerProxy(factory: (TransactionId,
     case Event(ContainerRemoved(_), _) =>
       stop()
     // Run failed, after another failed concurrent Run
-    case Event(_: FailureMessage, data: WarmedData) =>
+    case Event(f: FailureMessage, data: WarmedData) =>
       activeCount -= 1
       val newData = data.withoutResumeRun()
       if (activeCount == 0) {
-        destroyContainer(newData, true)
+        destroyContainer(newData, true, cause = Some(f.cause))
       } else {
         stay using newData
       }
@@ -664,7 +667,8 @@ class ContainerProxy(factory: (TransactionId,
   def destroyContainer(newData: ContainerStarted,
                        replacePrewarm: Boolean,
                        abort: Boolean = false,
-                       abortResponse: Option[ActivationResponse] = None) = {
+                       abortResponse: Option[ActivationResponse] = None,
+                       cause: Option[Throwable] = None) = {
     val container = newData.container
     if (!rescheduleJob) {
       context.parent ! ContainerRemoved(replacePrewarm)
@@ -676,14 +680,18 @@ class ContainerProxy(factory: (TransactionId,
     } else {
       rejectBuffered()
     }
-
+    //associate the tid of a failed in-flight transaction with the destroy process
+    implicit val tid: TransactionId = cause match {
+      case Some(c: ActivationUnsuccessfulError) => c.tid
+      case _                                    => TransactionId.invokerNanny
+    }
     val unpause = stateName match {
-      case Paused => container.resume()(TransactionId.invokerNanny)
+      case Paused => container.resume()
       case _      => Future.successful(())
     }
 
     unpause
-      .flatMap(_ => container.destroy()(TransactionId.invokerNanny))
+      .flatMap(_ => container.destroy(cause.isDefined))
       .map(_ => ContainerRemoved(replacePrewarm))
       .pipeTo(self)
     if (stateName != Removing) {
@@ -693,6 +701,11 @@ class ContainerProxy(factory: (TransactionId,
     }
   }
 
+  def getTidFromCause(cause: Throwable) =
+    cause match {
+      case c: ActivationUnsuccessfulError => c.tid
+      case _                              => TransactionId.unknown
+    }
   def abortBuffered(abortResponse: Option[ActivationResponse] = None) = {
     logging.info(this, s"aborting ${runBuffer.length} queued activations after failed init or failed cold start")
     runBuffer.foreach { job =>
@@ -932,7 +945,7 @@ class ContainerProxy(factory: (TransactionId,
         logging.info(
           this,
           s"Activation ${act.activationId} was unsuccessful at container ${stateData.getContainer} (with ${activeCount} still active) due to ${truncatedResult}")
-        Future.failed(ActivationUnsuccessfulError(act))
+        Future.failed(ActivationUnsuccessfulError(act, tid))
       case Left(error) => Future.failed(error)
       case Right(act) =>
         if (act.response.isApplicationError) {
@@ -1153,7 +1166,7 @@ trait ActivationError extends Exception {
 }
 
 /** Indicates an activation with a non-successful response */
-case class ActivationUnsuccessfulError(activation: WhiskActivation) extends ActivationError
+case class ActivationUnsuccessfulError(activation: WhiskActivation, tid: TransactionId) extends ActivationError
 
 /** Indicates reading logs for an activation failed (terminally, truncated) */
 case class ActivationLogReadingError(activation: WhiskActivation) extends ActivationError

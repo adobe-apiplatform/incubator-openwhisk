@@ -131,10 +131,20 @@ class KubernetesContainer(protected[core] val id: ContainerId,
   override def resume()(implicit transid: TransactionId): Future[Unit] =
     kubernetes.resume(this).flatMap(_ => super.resume())
 
-  override def destroy()(implicit transid: TransactionId): Future[Unit] = {
+  override def destroy(checkErrors: Boolean = false)(implicit transid: TransactionId): Future[Unit] = {
     super.destroy()
     portForward.foreach(_.close())
-    kubernetes.rm(this)
+    val logErrors = if (checkErrors) {
+      //get the pod container status to log for easier analysis
+      //make sure this does not prevent the rm() call to delete the pod
+      kubernetes.logPodStatus(this).recover {
+        case t: Throwable =>
+          logging.error(this, s"failed to log pod status ${t}")
+      }
+    } else {
+      Future.successful({})
+    }
+    logErrors.flatMap(_ => kubernetes.rm(this))
   }
 
   override def initialize(initializer: JsObject,
