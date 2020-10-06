@@ -442,7 +442,7 @@ class ContainerProxy(factory: (TransactionId,
       stay() using data
 
     //ContainerHealthError should cause rescheduling of the job
-    case Event(FailureMessage(e: ContainerHealthError), data: WarmedData) =>
+    case Event(f @ FailureMessage(e: ContainerHealthError), data: WarmedData) =>
       implicit val tid = e.tid
       MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_CONTAINER_HEALTH_FAILED_WARM)
       //resend to self will send to parent once we get to Removing state
@@ -455,7 +455,8 @@ class ContainerProxy(factory: (TransactionId,
         .getOrElse(data)
       rescheduleJob = true
       rejectBuffered()
-      destroyContainer(newData, true, cause = Some(e))
+      activeCount -= 1
+      destroyAfterUse(f, data)
 
     // Failed after /init (the first run failed) on prewarmed or cold start
     // - container will be destroyed
@@ -483,13 +484,7 @@ class ContainerProxy(factory: (TransactionId,
         this,
         s"Failed during use of warm container ${data.getContainer}, queued activations will be resent.")
       activeCount -= 1
-      if (activeCount == 0) {
-        destroyContainer(data, true, cause = Some(f.cause))
-      } else {
-        //signal that this container is going away (but don't remove it yet...)
-        rescheduleJob = true
-        goto(Removing)
-      }
+      destroyAfterUse(f, data)
 
     // Failed at getting a container for a cold-start run
     // - container will be destroyed
@@ -659,6 +654,19 @@ class ContainerProxy(factory: (TransactionId,
   }
 
   /**
+   *
+   */
+  def destroyAfterUse(f: FailureMessage, data: ContainerStarted) = {
+    if (activeCount == 0) {
+      destroyContainer(data, true, cause = Some(f.cause))
+    } else {
+      //signal that this container is going away (but don't remove it yet...)
+      rescheduleJob = true
+      goto(Removing)
+    }
+  }
+
+  /**
    * Destroys the container after unpausing it if needed. Can be used
    * as a state progression as it goes to Removing.
    *
@@ -683,7 +691,11 @@ class ContainerProxy(factory: (TransactionId,
     //associate the tid of a failed in-flight transaction with the destroy process
     implicit val tid: TransactionId = cause match {
       case Some(c: ActivationUnsuccessfulError) => c.tid
+      case Some(c: ContainerHealthError)        => c.tid
       case _                                    => TransactionId.invokerNanny
+    }
+    if (activeCount > 0) {
+      logging.error(this, s"Container terminating while ${activeCount} still in flight.")
     }
     val unpause = stateName match {
       case Paused => container.resume()

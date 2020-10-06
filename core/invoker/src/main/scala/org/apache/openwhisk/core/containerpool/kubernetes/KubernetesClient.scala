@@ -343,12 +343,38 @@ class KubernetesClient(
        * Ready:          True
        * Restart Count:  1
        */
+      /** if the pod itself fails, we can also show that status
+       * status:
+       * message: 'Pod ephemeral local storage usage exceeds the total limit of containers
+       * 5Mi. '
+       * phase: Failed
+       * reason: Evicted
+       * startTime: "2020-10-05T19:55:26Z"
+       */
       //if no terminated containers, wait and try again
 
-      Future.successful(podState.get().getStatus.getContainerStatuses.asScala)
-    }.flatMap { statuses =>
-      if (statuses.exists(_.getLastState.getTerminated != null)) {
+      Future.successful(podState.get().getStatus)
+    }.flatMap { podStatus =>
+      val statuses = podStatus.getContainerStatuses.asScala
+
+      //keep trying until either: no container statuses, OR at least one terminated container status
+      //if a pod fails, containerStatuses will be empty;
+      //if a container fails, there will eventually be a terminated container)
+      val sufficientStatusFound = statuses.isEmpty || statuses.exists(_.getLastState.getTerminated != null)
+
+      if (sufficientStatusFound) {
+        val failureType = if (statuses.isEmpty) {
+          "pod"
+        } else {
+          "container"
+        }
         Future {
+          //log the pod status
+          log.info(
+            this,
+            s"Pod status summary for: failure=$failureType phase=${podStatus.getPhase} reason=${podStatus.getReason} message=${podStatus.getMessage}")
+          log.info(this, s"Pod status: ${podStatus.toString}")
+          //log the container statuses
           statuses.foreach { c =>
             log.info(this, s"Pod $name container ${c.getName} status ${c.toString}")
             if (c.getLastState.getTerminated != null) {
@@ -362,9 +388,17 @@ class KubernetesClient(
         }
       } else {
         if (deadline.isOverdue()) {
-          Future.successful(log.info(
-            this,
-            s"no terminated containers after ${nextTries} tries; exceeded deadline ${config.terminationStatusPolling.timeout}"))
+          Future.successful {
+            //log the pod status
+            log.info(
+              this,
+              s"Pod status summary: phase=${podStatus.getPhase} reason=${podStatus.getReason} message=${podStatus.getMessage}")
+            log.info(this, s"Pod status: ${podStatus.toString}")
+            //log indication that no terminal containers found
+            log.info(
+              this,
+              s"no terminated containers after ${nextTries} tries; exceeded deadline ${config.terminationStatusPolling.timeout}")
+          }
         } else {
           log.debug(this, s"no terminated containers after ${nextTries} tries; will try again...")
           logPodContainerStatuses(namespace, name, nextTries, Some(deadline))
