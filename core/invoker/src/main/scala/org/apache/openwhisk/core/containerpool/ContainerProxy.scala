@@ -445,6 +445,7 @@ class ContainerProxy(factory: (TransactionId,
     case Event(f @ FailureMessage(e: ContainerHealthError), data: WarmedData) =>
       implicit val tid = e.tid
       MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_CONTAINER_HEALTH_FAILED_WARM)
+      context.parent ! ContainerRemoved(true)
       //resend to self will send to parent once we get to Removing state
       val newData = data.resumeRun
         .map { run =>
@@ -456,7 +457,7 @@ class ContainerProxy(factory: (TransactionId,
       rescheduleJob = true
       rejectBuffered()
       activeCount -= 1
-      destroyAfterUse(f, data)
+      destroyAfterUse(f, newData)
 
     // Failed after /init (the first run failed) on prewarmed or cold start
     // - container will be destroyed
@@ -484,6 +485,7 @@ class ContainerProxy(factory: (TransactionId,
         this,
         s"Failed during use of warm container ${data.getContainer}, queued activations will be resent.")
       activeCount -= 1
+      context.parent ! ContainerRemoved(true)
       destroyAfterUse(f, data)
 
     // Failed at getting a container for a cold-start run
@@ -657,6 +659,8 @@ class ContainerProxy(factory: (TransactionId,
    *
    */
   def destroyAfterUse(f: FailureMessage, data: ContainerStarted) = {
+    //signal parent to remove this container asap - but it should keep running till activeCount is 0
+
     if (activeCount == 0) {
       destroyContainer(data, true, cause = Some(f.cause))
     } else {
