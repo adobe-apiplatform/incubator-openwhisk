@@ -392,7 +392,7 @@ class DockerContainerTests
     val id = ContainerId("id")
     val container = new DockerContainer(id, ContainerAddress("ip"), true)
 
-    container.destroy()
+    container.destroy()(transid, None)
 
     (docker.rm(_: ContainerId)(_: TransactionId)).verify(id, transid)
   }

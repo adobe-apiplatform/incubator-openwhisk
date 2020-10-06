@@ -276,7 +276,7 @@ class YARNContainerFactoryTests
         .map(c => c.component_instance_name)
         .contains(containerToRemoveName))
 
-    val destroyFuture = container2.destroy()(TransactionId.testing)
+    val destroyFuture = container2.destroy()(TransactionId.testing, None)
     Await.result(destroyFuture, 30.seconds)
 
     //Ensure container of the correct type was deleted
@@ -371,10 +371,10 @@ class YARNContainerFactoryTests
     val container2 = Await.result(container2Future, 30.seconds)
     val container3 = Await.result(container3Future, 30.seconds)
 
-    val destroyFuture1 = container2.destroy()(TransactionId.testing)
+    val destroyFuture1 = container2.destroy()(TransactionId.testing, None)
     Await.result(destroyFuture1, 30.seconds)
 
-    val destroyFuture2 = container3.destroy()(TransactionId.testing)
+    val destroyFuture2 = container3.destroy()(TransactionId.testing, None)
     Await.result(destroyFuture2, 30.seconds)
 
     //Containers of the correct type was deleted

@@ -39,7 +39,7 @@ import okio.Buffer
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool.{ContainerAddress, ContainerId}
 import org.apache.openwhisk.core.containerpool.kubernetes._
-import org.apache.openwhisk.core.entity.ByteSize
+import org.apache.openwhisk.core.entity.{ByteSize, WhiskActivation}
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.containerpool.Container.ACTIVATION_LOG_SENTINEL
 
@@ -238,7 +238,8 @@ object KubernetesClientTests {
       Future.successful({})
     }
 
-    override def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId): Future[Unit] = {
+    override def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId,
+                                                              activation: Option[WhiskActivation]): Future[Unit] = {
       Future.successful({})
     }
   }

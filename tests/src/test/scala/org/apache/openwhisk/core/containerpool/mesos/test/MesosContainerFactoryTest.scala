@@ -254,7 +254,7 @@ class MesosContainerFactoryTest
 
     //destroy the container
     implicit val tid = TransactionId.testing
-    val deleted = container.destroy()
+    val deleted = container.destroy()(tid, None)
     probe.expectMsg(DeleteTask(lastTaskId))
 
     probe.reply(TaskStatus.newBuilder().setTaskId(taskId).setState(TaskState.TASK_KILLED).build())

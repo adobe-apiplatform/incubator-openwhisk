@@ -198,7 +198,7 @@ class KubernetesContainerTests
     val id = ContainerId("id")
     val container = new KubernetesContainer(id, ContainerAddress("ip"), "127.0.0.1", "docker://foo")
 
-    container.destroy()
+    container.destroy()(transid, None)
 
     (kubernetes.rm(_: KubernetesContainer)(_: TransactionId)).verify(container, transid)
   }

@@ -107,11 +107,14 @@ case class KubernetesPodApiException(e: Throwable) extends Exception(s"Pod was n
  */
 case class KubernetesInvokerNodeAffinity(enabled: Boolean, key: String, value: String)
 
+case class KubernetesInvokerPodAntiAffinity(enabled: Boolean, topologyKey: String)
+
 /**
  * General configuration for kubernetes client
  */
 case class KubernetesClientConfig(timeouts: KubernetesClientTimeoutConfig,
                                   userPodNodeAffinity: KubernetesInvokerNodeAffinity,
+                                  userPodInvokerAntiAffinity: KubernetesInvokerPodAntiAffinity,
                                   portForwardingEnabled: Boolean,
                                   actionNamespace: Option[String],
                                   podTemplate: Option[ConfigMapValue],

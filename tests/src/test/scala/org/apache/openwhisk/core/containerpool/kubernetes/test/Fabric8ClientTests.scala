@@ -49,6 +49,7 @@ class Fabric8ClientTests
     KubernetesClientConfig(
       KubernetesClientTimeoutConfig(runTimeout, 2.seconds),
       affinity.getOrElse(KubernetesInvokerNodeAffinity(false, "k", "v")),
+      KubernetesInvokerPodAntiAffinity(false, ""),
       false,
       None,
       configMap,

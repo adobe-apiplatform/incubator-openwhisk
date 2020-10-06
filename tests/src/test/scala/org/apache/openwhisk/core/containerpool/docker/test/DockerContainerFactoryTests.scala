@@ -144,7 +144,7 @@ class DockerContainerFactoryTests
 
     val c = Await.result(cf, 5000.milliseconds)
 
-    Await.result(c.destroy(), 500.milliseconds)
+    Await.result(c.destroy()(tid, None), 500.milliseconds)
 
   }
 
