@@ -35,6 +35,7 @@ import org.apache.openwhisk.core.containerpool.kubernetes.{
   KubernetesCpuScalingConfig,
   KubernetesEphemeralStorageConfig,
   KubernetesInvokerNodeAffinity,
+  KubernetesInvokerPodAntiAffinity,
   KubernetesTerminationStatusCheckConfig,
   WhiskPodBuilder
 }
@@ -62,6 +63,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
     KubernetesClientConfig(
       KubernetesClientTimeoutConfig(1.seconds, 2.seconds),
       affinity.getOrElse(KubernetesInvokerNodeAffinity(false, "k", "v")),
+      KubernetesInvokerPodAntiAffinity(false, ""),
       false,
       None,
       configMap,
@@ -80,6 +82,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
     val config = KubernetesClientConfig(
       KubernetesClientTimeoutConfig(1.second, 1.second),
       KubernetesInvokerNodeAffinity(false, "k", "v"),
+      KubernetesInvokerPodAntiAffinity(false, ""),
       true,
       None,
       None,
@@ -116,6 +119,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
     val config2 = KubernetesClientConfig(
       KubernetesClientTimeoutConfig(1.second, 1.second),
       KubernetesInvokerNodeAffinity(false, "k", "v"),
+      KubernetesInvokerPodAntiAffinity(false, ""),
       true,
       None,
       None,
@@ -137,6 +141,7 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
     val config = KubernetesClientConfig(
       KubernetesClientTimeoutConfig(1.second, 1.second),
       KubernetesInvokerNodeAffinity(false, "k", "v"),
+      KubernetesInvokerPodAntiAffinity(false, ""),
       true,
       None,
       None,
@@ -154,7 +159,37 @@ class WhiskPodBuilderTests extends FlatSpec with Matchers with KubeClientSupport
       c.getResources.getRequests.asScala.get("ephemeral-storage").map(_.getAmount) shouldBe Some("1024Mi")
     }
   }
+  it should "set pod anti-affinity when configured" in {
+    val config = KubernetesClientConfig(
+      KubernetesClientTimeoutConfig(1.second, 1.second),
+      KubernetesInvokerNodeAffinity(false, "k", "v"),
+      KubernetesInvokerPodAntiAffinity(true, "topokey"),
+      true,
+      None,
+      None,
+      Some(scalingConfig),
+      false,
+      None,
+      Some(KubernetesEphemeralStorageConfig(1.GB)),
+      KubernetesTerminationStatusCheckConfig(2.seconds, 20.seconds))
+    val builder = new WhiskPodBuilder(kubeClient, config)
 
+    val (pod, _) =
+      builder.buildPodSpec(name, testImage, 2.MB, Map("foo" -> "bar"), Map("invoker" -> "invoker12345"), config)
+
+    println(s"created ${Serialization.asYaml(pod)}")
+    withClue(Serialization.asYaml(pod)) {
+      val affinity = pod.getSpec.getAffinity
+      affinity.getPodAntiAffinity.getPreferredDuringSchedulingIgnoredDuringExecution.size() shouldBe 1
+      affinity.getPodAntiAffinity.getPreferredDuringSchedulingIgnoredDuringExecution.get(0).getWeight shouldBe 100
+      affinity.getPodAntiAffinity.getPreferredDuringSchedulingIgnoredDuringExecution
+        .get(0)
+        .getPodAffinityTerm
+        .getLabelSelector
+        .getMatchLabels
+        .get("invoker") shouldBe "invoker12345"
+    }
+  }
   it should "extend existing pod template" in {
     val template = """
        |---

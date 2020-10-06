@@ -81,11 +81,10 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient, config: KubernetesClie
     val specBuilder = pb1.editOrNewSpec().withRestartPolicy("Always")
 
     if (config.userPodNodeAffinity.enabled) {
-      val affinity = specBuilder
+      specBuilder
         .editOrNewAffinity()
         .editOrNewNodeAffinity()
         .editOrNewRequiredDuringSchedulingIgnoredDuringExecution()
-      affinity
         .addNewNodeSelectorTerm()
         .addNewMatchExpression()
         .withKey(config.userPodNodeAffinity.key)
@@ -96,6 +95,23 @@ class WhiskPodBuilder(client: NamespacedKubernetesClient, config: KubernetesClie
         .endRequiredDuringSchedulingIgnoredDuringExecution()
         .endNodeAffinity()
         .endAffinity()
+    }
+    if (config.userPodInvokerAntiAffinity.enabled) {
+      specBuilder
+        .editOrNewAffinity()
+        .editOrNewPodAntiAffinity()
+        .addNewPreferredDuringSchedulingIgnoredDuringExecution()
+        .withWeight(100)
+        .withNewPodAffinityTerm()
+        .withNewLabelSelector()
+        .addToMatchLabels("invoker", labels("invoker"))
+        .endLabelSelector()
+        .withNewTopologyKey(config.userPodInvokerAntiAffinity.topologyKey)
+        .endPodAffinityTerm()
+        .endPreferredDuringSchedulingIgnoredDuringExecution()
+        .endPodAntiAffinity()
+        .endAffinity()
+        .buildAffinity()
     }
 
     val containerBuilder = if (specBuilder.hasMatchingContainer(actionContainerPredicate)) {
