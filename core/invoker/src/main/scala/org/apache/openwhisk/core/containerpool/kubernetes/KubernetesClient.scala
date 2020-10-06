@@ -41,12 +41,11 @@ import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient}
 import okhttp3.{Call, Callback, Request, Response}
 import okio.BufferedSource
 import org.apache.commons.lang3.exception.ExceptionUtils
-import org.apache.openwhisk.common.LoggingMarkers
-import org.apache.openwhisk.common.{ConfigMapValue, Logging, TransactionId}
+import org.apache.openwhisk.common.{ConfigMapValue, Logging, LoggingMarkers, MetricEmitter, TransactionId}
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.containerpool.docker.ProcessRunner
 import org.apache.openwhisk.core.containerpool.{ContainerAddress, ContainerId}
-import org.apache.openwhisk.core.entity.ByteSize
+import org.apache.openwhisk.core.entity.{ByteSize, WhiskActivation}
 import org.apache.openwhisk.core.entity.size._
 import pureconfig._
 import pureconfig.generic.auto._
@@ -196,7 +195,7 @@ class KubernetesClient(
           .recoverWith {
             case e =>
               transid.failed(this, start, s"Failed create pod for '$name': ${e.getClass} - ${e.getMessage}", ErrorLevel)
-              logPodEvents(namespace, name, true);
+              logPodEvents(namespace, name, true)(transid, None);
               Future.failed(e)
           }
       }
@@ -274,7 +273,8 @@ class KubernetesClient(
   }
 
   private def logPodEvents(namespace: String, name: String, startFailure: Boolean)(
-    implicit tid: TransactionId): Future[Unit] = {
+    implicit tid: TransactionId,
+    activation: Option[WhiskActivation]): Future[Unit] = {
 
     //for startup failures, we only log events; for termination status (non-startup failures), we get the pod state as well
     val containers = if (!startFailure) {
@@ -319,21 +319,25 @@ class KubernetesClient(
       }
   }
 
-  private def logPodContainerStatuses(
-    namespace: String,
-    name: String,
-    tries: Int = 0,
-    deadlineOpt: Option[Deadline] = None)(implicit tid: TransactionId): Future[Unit] = {
+  private def logPodContainerStatuses(namespace: String,
+                                      name: String,
+                                      tries: Int = 0,
+                                      deadlineOpt: Option[Deadline] = None)(
+    implicit tid: TransactionId,
+    activation: Option[WhiskActivation]): Future[Unit] = {
     //wait to fetch container statuses, so that we allow time for propagation by k8s
     val nextTries = tries + 1
     val deadline = deadlineOpt.getOrElse(config.terminationStatusPolling.timeout.fromNow)
     after(config.terminationStatusPolling.period, scheduler) {
       log.debug(this, s"collecting container statuses for pod $name")
-      val podState = kubeRestClient
-        .pods()
-        .inNamespace(namespace)
-        .withName(name)
-
+      Future {
+        val podState = kubeRestClient
+          .pods()
+          .inNamespace(namespace)
+          .withName(name)
+        podState.get().getStatus
+      }
+    }.flatMap { podStatus =>
       /** want to show something like this in logs (from `kubectl get pod`):
        * Last State:     Terminated
        * Reason:       Error
@@ -351,10 +355,6 @@ class KubernetesClient(
        * reason: Evicted
        * startTime: "2020-10-05T19:55:26Z"
        */
-      //if no terminated containers, wait and try again
-
-      Future.successful(podState.get().getStatus)
-    }.flatMap { podStatus =>
       val statuses = podStatus.getContainerStatuses.asScala
 
       //keep trying until either: no container statuses, OR at least one terminated container status
@@ -385,6 +385,36 @@ class KubernetesClient(
                   s" message=${c.getLastState.getTerminated.getMessage}")
             }
           }
+          //use the full path of action for metrics
+          val action = activation
+            .map(_.annotations.getAs[String](WhiskActivation.pathAnnotation).getOrElse("NONE"))
+            .getOrElse("NONE")
+          val namespace = activation.map(_.namespace.asString).getOrElse("NONE")
+          val subject = activation.map(_.subject.asString).getOrElse("NONE")
+          val reason = if (podStatus.getReason == null) {
+            //for container failure, list the container name and reason
+            statuses
+              .filter(c => c.getLastState.getTerminated != null)
+              .map(c => s"${c.getName}-${c.getLastState.getTerminated.getReason}")
+              .mkString(",")
+          } else {
+            //for pod failure, list the reason and phase and message summary
+            val messageSummary =
+              if (podStatus.getMessage.contains("ephemeral local storage usage exceeds the total limit")) {
+                "ExceededStorage"
+              } else {
+                //limit the message summary to 64 chars
+                podStatus.getMessage.take(64)
+              }
+            s"${podStatus.getReason}-${podStatus.getPhase}-$messageSummary"
+          }
+          log.info(
+            this,
+            s"emitting metric for failureType=${failureType},reason=${reason},action=${action},namespace=${namespace},subject=$subject")
+          //emit pod/container failure metrics
+          MetricEmitter.emitCounterMetric(
+            LoggingMarkers.INVOKER_KUBERNETES_FAILURE(failureType, reason, action, namespace, subject))
+
         }
       } else {
         if (deadline.isOverdue()) {
@@ -480,7 +510,8 @@ class KubernetesClient(
       case e: Throwable => Future.failed(e)
     }
 
-  def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId) = {
+  def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId,
+                                                   activation: Option[WhiskActivation]) = {
     logPodEvents(kubeRestClient.getNamespace, container.id.asString, false)
   }
 }
@@ -526,7 +557,8 @@ trait KubernetesApi {
 
   def addLabel(container: KubernetesContainer, labels: Map[String, String]): Future[Unit]
 
-  def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId): Future[Unit]
+  def logPodStatus(container: KubernetesContainer)(implicit transid: TransactionId,
+                                                   activation: Option[WhiskActivation]): Future[Unit]
 
 }
 

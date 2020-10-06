@@ -30,7 +30,13 @@ import spray.json.JsObject
 import org.apache.openwhisk.common.{Logging, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.entity.ActivationResponse.{ContainerConnectionError, ContainerResponse}
-import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ActivationResponse, ByteSize, WhiskAction}
+import org.apache.openwhisk.core.entity.{
+  ActivationEntityLimit,
+  ActivationResponse,
+  ByteSize,
+  WhiskAction,
+  WhiskActivation
+}
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
 
@@ -105,7 +111,8 @@ trait Container {
   def logs(limit: ByteSize, waitForSentinel: Boolean)(implicit transid: TransactionId): Source[ByteString, Any]
 
   /** Completely destroys this instance of the container. */
-  def destroy(checkErrors: Boolean = false)(implicit transid: TransactionId): Future[Unit] = {
+  def destroy(checkErrors: Boolean = false)(implicit transid: TransactionId,
+                                            activation: Option[WhiskActivation]): Future[Unit] = {
     closeConnections(httpConnection)
   }
 

@@ -34,7 +34,7 @@ import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.containerpool.docker.{CompleteAfterOccurrences, OccurrencesNotFoundException}
-import org.apache.openwhisk.core.entity.{ByteSize, WhiskAction}
+import org.apache.openwhisk.core.entity.{ByteSize, WhiskAction, WhiskActivation}
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
 import spray.json.JsObject
@@ -131,7 +131,8 @@ class KubernetesContainer(protected[core] val id: ContainerId,
   override def resume()(implicit transid: TransactionId): Future[Unit] =
     kubernetes.resume(this).flatMap(_ => super.resume())
 
-  override def destroy(checkErrors: Boolean = false)(implicit transid: TransactionId): Future[Unit] = {
+  override def destroy(checkErrors: Boolean = false)(implicit transid: TransactionId,
+                                                     activation: Option[WhiskActivation]): Future[Unit] = {
     super.destroy()
     portForward.foreach(_.close())
     val logErrors = if (checkErrors) {

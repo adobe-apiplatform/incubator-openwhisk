@@ -26,12 +26,12 @@ import spray.json._
 import org.apache.openwhisk.common.{Logging, TransactionId}
 import org.apache.openwhisk.core.containerpool.{Container, ContainerAddress, ContainerId}
 import org.apache.openwhisk.core.containerpool.logging.LogLine
-import org.apache.openwhisk.core.entity.ByteSize
+import org.apache.openwhisk.core.entity.{ByteSize, WhiskActivation}
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.core.yarn.YARNComponentActor.RemoveContainer
 import akka.pattern.ask
-import scala.concurrent.duration._
 
+import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
@@ -68,7 +68,8 @@ class YARNTask(override protected val id: ContainerId,
   }
 
   /** Completely destroys this instance of the container. */
-  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId): Future[Unit] = {
+  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId,
+                                             activation: Option[WhiskActivation]): Future[Unit] = {
 
     implicit val timeout: Timeout = Timeout(containerRemoveTimeoutMS.milliseconds)
     ask(yarnComponentActor, RemoveContainer(component_instance_name)).mapTo[Unit]

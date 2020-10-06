@@ -693,10 +693,10 @@ class ContainerProxy(factory: (TransactionId,
       rejectBuffered()
     }
     //associate the tid of a failed in-flight transaction with the destroy process
-    implicit val tid: TransactionId = cause match {
-      case Some(c: ActivationUnsuccessfulError) => c.tid
-      case Some(c: ContainerHealthError)        => c.tid
-      case _                                    => TransactionId.invokerNanny
+    implicit val (tid, activation): (TransactionId, Option[WhiskActivation]) = cause match {
+      case Some(c: ActivationUnsuccessfulError) => (c.tid, Some(c.activation))
+      case Some(c: ContainerHealthError)        => (c.tid, None)
+      case _                                    => (TransactionId.invokerNanny, None)
     }
     if (activeCount > 0) {
       logging.error(this, s"Container terminating while ${activeCount} still in flight.")

@@ -474,6 +474,18 @@ object LoggingMarkers {
     LogMarkerToken(invoker, "runc", start, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.time.milliseconds)
   def INVOKER_KUBEAPI_CMD(cmd: String) =
     LogMarkerToken(invoker, "kubeapi", start, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.none)
+
+  def INVOKER_KUBERNETES_FAILURE(failureType: String,
+                                 reason: String,
+                                 action: String,
+                                 namespace: String,
+                                 subject: String) =
+    LogMarkerToken(
+      invoker,
+      "kubeContainerFailure",
+      start,
+      Some(failureType),
+      Map("reason" -> reason, "action" -> action, "namespace" -> namespace, "subject" -> subject))(MeasurementUnit.none)
   def INVOKER_MESOS_CMD(cmd: String) =
     LogMarkerToken(invoker, "mesos", start, Some(cmd), Map("cmd" -> cmd))(MeasurementUnit.time.milliseconds)
   def INVOKER_MESOS_CMD_TIMEOUT(cmd: String) =

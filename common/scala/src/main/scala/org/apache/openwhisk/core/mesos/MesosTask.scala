@@ -37,6 +37,7 @@ import com.adobe.api.platform.runtime.mesos.SubmitTask
 import com.adobe.api.platform.runtime.mesos.TaskDef
 import com.adobe.api.platform.runtime.mesos.User
 import java.time.Instant
+
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.util.Failure
@@ -50,7 +51,7 @@ import org.apache.openwhisk.core.containerpool.Container
 import org.apache.openwhisk.core.containerpool.ContainerAddress
 import org.apache.openwhisk.core.containerpool.ContainerId
 import org.apache.openwhisk.core.containerpool.logging.LogLine
-import org.apache.openwhisk.core.entity.ByteSize
+import org.apache.openwhisk.core.entity.{ByteSize, WhiskActivation}
 import org.apache.openwhisk.core.entity.size._
 
 /**
@@ -210,7 +211,8 @@ class MesosTask(override protected val id: ContainerId,
   }
 
   /** Completely destroys this instance of the container. */
-  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId): Future[Unit] = {
+  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId,
+                                             activation: Option[WhiskActivation]): Future[Unit] = {
     MesosTask.destroy(mesosClientActor, mesosConfig, taskId)
   }
 

@@ -20,17 +20,19 @@ package org.apache.openwhisk.core.containerpool.docker
 import java.time.Instant
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
+
 import akka.actor.ActorSystem
 import akka.stream._
 import akka.stream.scaladsl.Framing.FramingException
 import spray.json._
+
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.entity.ActivationResponse.{ConnectionError, MemoryExhausted}
-import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ByteSize}
+import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ByteSize, WhiskActivation}
 import org.apache.openwhisk.core.entity.size._
 import akka.stream.scaladsl.{Framing, Source}
 import akka.stream.stage._
@@ -186,7 +188,8 @@ class DockerContainer(protected val id: ContainerId,
   override def resume()(implicit transid: TransactionId): Future[Unit] = {
     (if (useRunc) { runc.resume(id) } else { docker.unpause(id) }).flatMap(_ => super.resume())
   }
-  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId): Future[Unit] = {
+  override def destroy(checkErrors: Boolean)(implicit transid: TransactionId,
+                                             activation: Option[WhiskActivation]): Future[Unit] = {
     super.destroy()
     docker.rm(id)
   }
