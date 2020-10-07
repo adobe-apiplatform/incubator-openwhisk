@@ -107,7 +107,7 @@ class MemoryArtifactStore[DocumentAbstraction <: DocumentSerializer](dbName: Str
 
   override protected[core] implicit val executionContext: ExecutionContext = system.dispatcher
 
-  private val artifacts = new TrieMap[String, Artifact]
+  private var artifacts = new TrieMap[String, Artifact]
 
   private val _id = "_id"
   private val _rev = "_rev"
@@ -298,6 +298,7 @@ class MemoryArtifactStore[DocumentAbstraction <: DocumentSerializer](dbName: Str
 
   override def shutdown(): Unit = {
     attachmentStore.shutdown()
+    artifacts = new TrieMap[String, Artifact]
   }
 
   override protected[database] def get(id: DocId)(implicit transid: TransactionId): Future[Option[JsObject]] = {
