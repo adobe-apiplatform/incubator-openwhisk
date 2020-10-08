@@ -602,7 +602,8 @@ class ContainerProxyTests
     expectMsg(Transition(machine, Ready, Running))
     //run the second as failure
     runPromises(1).failure(ContainerHealthError(messageTransId, "intentional failure"))
-    //on failure, buffered are resent first
+    //on failure, container remove signaled, then buffered are resent
+    expectMsg(ContainerRemoved(true))
     expectMsg(runAfterFail)
     //resend the first run to parent, and start removal process
     expectMsg(RescheduleJob)
@@ -948,6 +949,7 @@ class ContainerProxyTests
     //fail the second run
     runPromises(1).success(runInterval, ActivationResponse.whiskError("intentional failure in test"))
     //go to Removing state when a failure happens while others are in flight
+    expectMsg(ContainerRemoved(true))
     expectMsg(Transition(machine, Running, Removing))
     expectMsg(RescheduleJob)
     awaitAssert {
@@ -1018,6 +1020,7 @@ class ContainerProxyTests
     //succeed the second run
     runPromises(1).success(runInterval, ActivationResponse.success())
     //go to Removing state when a failure happens while others are in flight
+    expectMsg(ContainerRemoved(true))
     expectMsg(Transition(machine, Running, Removing))
     expectMsg(RescheduleJob)
     awaitAssert {
@@ -1659,6 +1662,7 @@ class ContainerProxyTests
     val runMessage = Run(action, message)
     machine ! runMessage
     expectMsg(Transition(machine, Paused, Running))
+    expectMsg(ContainerRemoved(true))
     expectMsg(RescheduleJob)
     expectMsg(Transition(machine, Running, Removing))
     expectMsg(runMessage)
@@ -1711,6 +1715,7 @@ class ContainerProxyTests
     val runMessage = Run(action, message)
     machine ! runMessage
     expectMsg(Transition(machine, Paused, Running))
+    expectMsg(ContainerRemoved(true))
     expectMsg(RescheduleJob)
     expectMsg(Transition(machine, Running, Removing))
     expectMsg(runMessage)
@@ -1762,6 +1767,7 @@ class ContainerProxyTests
     val runMessage = Run(action, message)
     machine ! runMessage
     expectMsg(Transition(machine, Ready, Running))
+    expectMsg(ContainerRemoved(true))
     expectMsg(RescheduleJob)
     expectMsg(Transition(machine, Running, Removing))
     expectMsg(runMessage)

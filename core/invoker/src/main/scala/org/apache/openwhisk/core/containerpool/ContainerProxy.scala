@@ -568,7 +568,7 @@ class ContainerProxy(factory: (TransactionId,
       val newData = data.withoutResumeRun()
       //if there are items in runbuffer, process them if there is capacity, and stay; otherwise if we have any pending activations, also stay
       if (activeCount == 0) {
-        destroyContainer(newData, true)
+        destroyContainer(newData, true, alreadyRemoved = true)
       } else {
         stay using newData
       }
@@ -579,7 +579,7 @@ class ContainerProxy(factory: (TransactionId,
       activeCount -= 1
       val newData = data.withoutResumeRun()
       if (activeCount == 0) {
-        destroyContainer(newData, true, cause = Some(f.cause))
+        destroyContainer(newData, true, cause = Some(f.cause), alreadyRemoved = true)
       } else {
         stay using newData
       }
@@ -662,7 +662,7 @@ class ContainerProxy(factory: (TransactionId,
     //signal parent to remove this container asap - but it should keep running till activeCount is 0
 
     if (activeCount == 0) {
-      destroyContainer(data, true, cause = Some(f.cause))
+      destroyContainer(data, true, cause = Some(f.cause), alreadyRemoved = true)
     } else {
       //signal that this container is going away (but don't remove it yet...)
       rescheduleJob = true
@@ -680,10 +680,13 @@ class ContainerProxy(factory: (TransactionId,
                        replacePrewarm: Boolean,
                        abort: Boolean = false,
                        abortResponse: Option[ActivationResponse] = None,
-                       cause: Option[Throwable] = None) = {
+                       cause: Option[Throwable] = None,
+                       alreadyRemoved: Boolean = false) = {
     val container = newData.container
     if (!rescheduleJob) {
-      context.parent ! ContainerRemoved(replacePrewarm)
+      if (!alreadyRemoved) {
+        context.parent ! ContainerRemoved(replacePrewarm)
+      }
     } else {
       context.parent ! RescheduleJob
     }
