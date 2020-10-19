@@ -22,10 +22,13 @@ import scala.concurrent.duration._
 import scala.util.{Failure, Success, Try}
 import org.apache.kafka.common.errors.RecordTooLargeException
 import akka.actor.ActorSystem
+import akka.event.Logging
 import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.server.RequestContext
 import akka.http.scaladsl.server.RouteResult
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
+import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
+import akka.http.scaladsl.server.directives.{DebuggingDirectives, LogEntry}
 import akka.http.scaladsl.unmarshalling._
 import spray.json._
 import spray.json.DefaultJsonProtocol._
@@ -45,6 +48,7 @@ import org.apache.openwhisk.core.entitlement.Collection
 import org.apache.openwhisk.core.loadBalancer.LoadBalancerException
 import pureconfig._
 import org.apache.openwhisk.core.ConfigKeys
+
 
 /**
  * A singleton object which defines the properties that must be present in a configuration
@@ -282,44 +286,49 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
                        waitOverride: FiniteDuration,
                        result: Boolean)(implicit transid: TransactionId): RequestContext => Future[RouteResult] = {
     val waitForResponse = if (blocking) Some(waitOverride) else None
-    onComplete(invokeAction(user, actionWithMergedParams, payload, waitForResponse, cause = None)) {
-      case Success(Left(activationId)) =>
-        // non-blocking invoke or blocking invoke which got queued instead
-        respondWithActivationIdHeader(activationId) {
-          complete(Accepted, activationId.toJsObject)
-        }
-      case Success(Right(activation)) =>
-        val response = if (result) activation.resultAsJson else activation.toExtendedJson()
 
-        respondWithActivationIdHeader(activation.activationId) {
-          if (activation.response.isSuccess) {
-            complete(OK, response)
-          } else if (activation.response.isApplicationError) {
-            // actions that result is ApplicationError status are considered a 'success'
-            // and will have an 'error' property in the result - the HTTP status is OK
-            // and clients must check the response status if it exists
-            // NOTE: response status will not exist in the JSON object if ?result == true
-            // and instead clients must check if 'error' is in the JSON
-            // PRESERVING OLD BEHAVIOR and will address defect in separate change
-            complete(BadGateway, response)
-          } else if (activation.response.isContainerError) {
-            complete(BadGateway, response)
-          } else {
-            complete(InternalServerError, response)
+
+      onComplete(invokeAction(user, actionWithMergedParams, payload, waitForResponse, cause = None)) {
+        case Success(Left(activationId)) =>
+          // non-blocking invoke or blocking invoke which got queued instead
+          respondWithActivationIdHeader(activationId) {
+            complete(Accepted, activationId.toJsObject)
           }
-        }
-      case Failure(t: RecordTooLargeException) =>
-        logging.debug(this, s"[POST] action payload was too large")
-        terminate(PayloadTooLarge)
-      case Failure(RejectRequest(code, message)) =>
-        logging.debug(this, s"[POST] action rejected with code $code: $message")
-        terminate(code, message)
-      case Failure(t: LoadBalancerException) =>
-        logging.error(this, s"[POST] failed in loadbalancer: ${t.getMessage}")
-        terminate(ServiceUnavailable)
-      case Failure(t: Throwable) =>
-        logging.error(this, s"[POST] action activation failed: ${t.getMessage}")
-        terminate(InternalServerError)
+        case Success(Right(activation)) =>
+          val response = if (result) activation.resultAsJson else activation.toExtendedJson()
+
+          respondWithActivationIdHeader(activation.activationId) {
+            DebuggingDirectives.logRequestResult(oneLineLogInfo(_, activation)) {
+              if (activation.response.isSuccess) {
+                complete(OK, response)
+              } else if (activation.response.isApplicationError) {
+                // actions that result is ApplicationError status are considered a 'success'
+                // and will have an 'error' property in the result - the HTTP status is OK
+                // and clients must check the response status if it exists
+                // NOTE: response status will not exist in the JSON object if ?result == true
+                // and instead clients must check if 'error' is in the JSON
+                // PRESERVING OLD BEHAVIOR and will address defect in separate change
+                complete(BadGateway, response)
+              } else if (activation.response.isContainerError) {
+                complete(BadGateway, response)
+              } else {
+                complete(InternalServerError, response)
+              }
+            }
+          }
+        case Failure(t: RecordTooLargeException) =>
+          logging.debug(this, s"[POST] action payload was too large")
+          terminate(PayloadTooLarge)
+        case Failure(RejectRequest(code, message)) =>
+          logging.debug(this, s"[POST] action rejected with code $code: $message")
+          terminate(code, message)
+        case Failure(t: LoadBalancerException) =>
+          logging.error(this, s"[POST] failed in loadbalancer: ${t.getMessage}")
+          terminate(ServiceUnavailable)
+        case Failure(t: Throwable) =>
+          logging.error(this, s"[POST] action activation failed: ${t.getMessage}")
+          terminate(InternalServerError)
+
     }
   }
 
@@ -736,6 +745,29 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
   /** Custom unmarshaller for query parameters "skip" for "list" operations. */
   private implicit val stringToListSkip: Unmarshaller[String, ListSkip] = RestApiCommons.stringToListSkip(collection)
 
+  /**
+   * custom logging message for the controller to log request, activation id, activation result, response in one line
+   * @param req
+   * @param activation
+   * @param tid
+   * @return
+   */
+  protected def oneLineLogInfo(req: HttpRequest,  activation:WhiskActivation )(implicit tid: TransactionId): RouteResult => Option[LogEntry] = {
+    case RouteResult.Complete(res: HttpResponse) =>
+      val m = req.method.name
+      val p = req.uri.path.toString
+      val q = req.uri.query().toMap.toString()
+      val l = Logging.InfoLevel
+      val st = res.status.intValue.toString  // http response status code
+      val aid = activation.activationId.asString
+      val ast = activation.response.statusCode  // activation response status code
+      val name = "ActionsApi"
+
+      Some(LogEntry(s"[$tid] [$name] requestMethod=$m requestPath='$p' requestParam=$q activationId=$aid activationResult=$ast httpResponse=$st", l))
+
+    case _ => None // other kind of responses
+
+  }
 }
 
 private case class TooManyActionsInSequence() extends IllegalArgumentException

@@ -1573,6 +1573,21 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     stream.reset()
   }
 
+  it should "ensure one line controller log present while invoking a blocking action" in {
+    implicit val tid = transid()
+    val action = WhiskAction(namespace, aname(), jsDefault("??"))
+    put(entityStore, action)
+    Post(s"$collectionPath/${action.name}?blocking=true") ~> Route.seal(routes(creds)) ~> check {
+      status should be(Accepted)
+      val response = responseAs[JsObject]
+      response.fields("activationId") should not be None
+      headers should contain(RawHeader(ActivationIdHeader, response.fields("activationId").convertTo[String]))
+    }
+    stream.toString should include(s"[$tid] [ActionsApi] request= ")
+
+    stream.reset()
+  }
+
   it should "report proper error when record is corrupted on delete" in {
     implicit val tid = transid()
     val entity = BadEntity(namespace, aname())
