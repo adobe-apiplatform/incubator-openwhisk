@@ -17,38 +17,34 @@
 
 package org.apache.openwhisk.core.controller
 
-import scala.concurrent.Future
-import scala.concurrent.duration._
-import scala.util.{Failure, Success, Try}
-import org.apache.kafka.common.errors.RecordTooLargeException
 import akka.actor.ActorSystem
 import akka.event.Logging
-import akka.http.scaladsl.model.StatusCodes._
-import akka.http.scaladsl.server.RequestContext
-import akka.http.scaladsl.server.RouteResult
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
+import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
+import akka.http.scaladsl.server.{RequestContext, RouteResult}
 import akka.http.scaladsl.server.directives.{DebuggingDirectives, LogEntry}
 import akka.http.scaladsl.unmarshalling._
-import spray.json._
-import spray.json.DefaultJsonProtocol._
+import org.apache.kafka.common.errors.RecordTooLargeException
 import org.apache.openwhisk.common.TransactionId
-import org.apache.openwhisk.core.{FeatureFlags, WhiskConfig}
 import org.apache.openwhisk.core.controller.RestApiCommons.{ListLimit, ListSkip}
 import org.apache.openwhisk.core.controller.actions.PostActionActivation
 import org.apache.openwhisk.core.database.{ActivationStore, CacheChangeNotification, NoDocumentException}
-import org.apache.openwhisk.core.entitlement._
+import org.apache.openwhisk.core.entitlement.{Collection, Resource, _}
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.types.EntityStore
+import org.apache.openwhisk.core.loadBalancer.LoadBalancerException
+import org.apache.openwhisk.core.{ConfigKeys, FeatureFlags, WhiskConfig}
 import org.apache.openwhisk.http.ErrorResponse.terminate
 import org.apache.openwhisk.http.Messages
 import org.apache.openwhisk.http.Messages._
-import org.apache.openwhisk.core.entitlement.Resource
-import org.apache.openwhisk.core.entitlement.Collection
-import org.apache.openwhisk.core.loadBalancer.LoadBalancerException
 import pureconfig._
-import org.apache.openwhisk.core.ConfigKeys
+import spray.json.DefaultJsonProtocol._
+import spray.json._
 
+import scala.concurrent.Future
+import scala.concurrent.duration._
+import scala.util.{Failure, Success, Try}
 
 /**
  * A singleton object which defines the properties that must be present in a configuration
@@ -94,110 +90,27 @@ object WhiskActionsApi {
 trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with ReferencedEntities {
   services: WhiskServices =>
 
-  protected override val collection = Collection(Collection.ACTIONS)
+  /** Max atomic action count allowed for sequences. */
+  private lazy val actionSequenceLimit = whiskConfig.actionSequenceLimit.toInt
 
   /** An actor system for timed based futures. */
   protected implicit val actorSystem: ActorSystem
-
-  /** Database service to CRUD actions. */
-  protected val entityStore: EntityStore
+  protected override val collection = Collection(Collection.ACTIONS)
 
   /** Notification service for cache invalidation. */
   protected implicit val cacheChangeNotification: Some[CacheChangeNotification]
 
+  /** Database service to CRUD actions. */
+  protected val entityStore: EntityStore
+
   /** Database service to get activations. */
   protected val activationStore: ActivationStore
-
-  /** Config flag for Execute Only for Actions in Shared Packages */
-  protected def executeOnly =
-    loadConfigOrThrow[Boolean](ConfigKeys.sharedPackageExecuteOnly)
 
   /** Entity normalizer to JSON object. */
   import RestApiCommons.emptyEntityToJsObject
 
   /** JSON response formatter. */
   import RestApiCommons.jsonDefaultResponsePrinter
-
-  /**
-   * Handles operations on action resources, which encompass these cases:
-   *
-   * 1. ns/foo     -> subject must be authorized for one of { action(ns, *), action(ns, foo) },
-   *                  resource resolves to { action(ns, foo) }
-   *
-   * 2. ns/bar/foo -> where bar is a package
-   *                  subject must be authorized for one of { package(ns, *), package(ns, bar), action(ns.bar, foo) }
-   *                  resource resolves to { action(ns.bar, foo) }
-   *
-   * 3. ns/baz/foo -> where baz is a binding to ns'.bar
-   *                  subject must be authorized for one of { package(ns, *), package(ns, baz) }
-   *                  *and* one of { package(ns', *), package(ns', bar), action(ns'.bar, foo) }
-   *                  resource resolves to { action(ns'.bar, foo) }
-   *
-   * Note that package(ns, xyz) == action(ns.xyz, *) and if subject has rights to package(ns, xyz)
-   * then they also have rights to action(ns.xyz, *) since sharing is done at the package level and
-   * is not more granular; hence a check on action(ns.xyz, abc) is eschewed.
-   *
-   * Only list is supported for these resources:
-   *
-   * 4. ns/bar/    -> where bar is a package
-   *                  subject must be authorized for one of { package(ns, *), package(ns, bar) }
-   *                  resource resolves to { action(ns.bar, *) }
-   *
-   * 5. ns/baz/    -> where baz is a binding to ns'.bar
-   *                  subject must be authorized for one of { package(ns, *), package(ns, baz) }
-   *                  *and* one of { package(ns', *), package(ns', bar) }
-   *                  resource resolves to { action(ns.bar, *) }
-   */
-  protected override def innerRoutes(user: Identity, ns: EntityPath)(implicit transid: TransactionId) = {
-    (entityPrefix & entityOps & requestMethod) { (segment, m) =>
-      entityname(segment) { outername =>
-        pathEnd {
-          // matched /namespace/collection/name
-          // this is an action in default package, authorize and dispatch
-          authorizeAndDispatch(m, user, Resource(ns, collection, Some(outername)))
-        } ~ (get & pathSingleSlash) {
-          // matched GET /namespace/collection/package-name/
-          // list all actions in package iff subject is entitled to READ package
-          val resource = Resource(ns, Collection(Collection.PACKAGES), Some(outername))
-          onComplete(entitlementProvider.check(user, Privilege.READ, resource)) {
-            case Success(_) => listPackageActions(user, FullyQualifiedEntityName(ns, EntityName(outername)))
-            case Failure(f) => super.handleEntitlementFailure(f)
-          }
-        } ~ (entityPrefix & pathEnd) { segment =>
-          entityname(segment) { innername =>
-            // matched /namespace/collection/package-name/action-name
-            // this is an action in a named package
-            val packageDocId = FullyQualifiedEntityName(ns, EntityName(outername)).toDocId
-            val packageResource = Resource(ns.addPath(EntityName(outername)), collection, Some(innername))
-
-            val right = collection.determineRight(m, Some(innername))
-            onComplete(entitlementProvider.check(user, right, packageResource)) {
-              case Success(_) =>
-                getEntity(WhiskPackage.get(entityStore, packageDocId), Some {
-                  if (right == Privilege.READ || right == Privilege.ACTIVATE) { wp: WhiskPackage =>
-                    val actionResource = Resource(wp.fullPath, collection, Some(innername))
-                    dispatchOp(user, right, actionResource)
-
-                  } else {
-                    // these packaged action operations do not need merging with the package,
-                    // but may not be permitted if this is a binding, or if the subject does
-                    // not have PUT and DELETE rights to the package itself
-                    (wp: WhiskPackage) =>
-                      wp.binding map { _ =>
-                        terminate(BadRequest, Messages.notAllowedOnBinding)
-                      } getOrElse {
-                        val actionResource = Resource(wp.fullPath, collection, Some(innername))
-                        dispatchOp(user, right, actionResource)
-                      }
-                  }
-                })
-              case Failure(f) => super.handleEntitlementFailure(f)
-            }
-          }
-        }
-      }
-    }
-  }
 
   /**
    * Creates or updates action if it already exists. The PUT content is deserialized into a WhiskActionPut
@@ -287,48 +200,84 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
                        result: Boolean)(implicit transid: TransactionId): RequestContext => Future[RouteResult] = {
     val waitForResponse = if (blocking) Some(waitOverride) else None
 
+    onComplete(invokeAction(user, actionWithMergedParams, payload, waitForResponse, cause = None)) {
+      case Success(Left(activationId)) =>
+        // non-blocking invoke or blocking invoke which got queued instead
+        respondWithActivationIdHeader(activationId) {
+          complete(Accepted, activationId.toJsObject)
+        }
+      case Success(Right(activation)) =>
+        val response = if (result) activation.resultAsJson else activation.toExtendedJson()
 
-      onComplete(invokeAction(user, actionWithMergedParams, payload, waitForResponse, cause = None)) {
-        case Success(Left(activationId)) =>
-          // non-blocking invoke or blocking invoke which got queued instead
-          respondWithActivationIdHeader(activationId) {
-            complete(Accepted, activationId.toJsObject)
-          }
-        case Success(Right(activation)) =>
-          val response = if (result) activation.resultAsJson else activation.toExtendedJson()
-
-          respondWithActivationIdHeader(activation.activationId) {
-            DebuggingDirectives.logRequestResult(oneLineLogInfo(_, activation)) {
-              if (activation.response.isSuccess) {
-                complete(OK, response)
-              } else if (activation.response.isApplicationError) {
-                // actions that result is ApplicationError status are considered a 'success'
-                // and will have an 'error' property in the result - the HTTP status is OK
-                // and clients must check the response status if it exists
-                // NOTE: response status will not exist in the JSON object if ?result == true
-                // and instead clients must check if 'error' is in the JSON
-                // PRESERVING OLD BEHAVIOR and will address defect in separate change
-                complete(BadGateway, response)
-              } else if (activation.response.isContainerError) {
-                complete(BadGateway, response)
-              } else {
-                complete(InternalServerError, response)
-              }
+        respondWithActivationIdHeader(activation.activationId) {
+          DebuggingDirectives.logRequestResult(oneLineLogInfo(_, activation)) {
+            if (activation.response.isSuccess) {
+              complete(OK, response)
+            } else if (activation.response.isApplicationError) {
+              // actions that result is ApplicationError status are considered a 'success'
+              // and will have an 'error' property in the result - the HTTP status is OK
+              // and clients must check the response status if it exists
+              // NOTE: response status will not exist in the JSON object if ?result == true
+              // and instead clients must check if 'error' is in the JSON
+              // PRESERVING OLD BEHAVIOR and will address defect in separate change
+              complete(BadGateway, response)
+            } else if (activation.response.isContainerError) {
+              complete(BadGateway, response)
+            } else {
+              complete(InternalServerError, response)
             }
           }
-        case Failure(t: RecordTooLargeException) =>
-          logging.debug(this, s"[POST] action payload was too large")
-          terminate(PayloadTooLarge)
-        case Failure(RejectRequest(code, message)) =>
-          logging.debug(this, s"[POST] action rejected with code $code: $message")
-          terminate(code, message)
-        case Failure(t: LoadBalancerException) =>
-          logging.error(this, s"[POST] failed in loadbalancer: ${t.getMessage}")
-          terminate(ServiceUnavailable)
-        case Failure(t: Throwable) =>
-          logging.error(this, s"[POST] action activation failed: ${t.getMessage}")
-          terminate(InternalServerError)
+        }
+      case Failure(t: RecordTooLargeException) =>
+        logging.debug(this, s"[POST] action payload was too large")
+        terminate(PayloadTooLarge)
+      case Failure(RejectRequest(code, message)) =>
+        logging.debug(this, s"[POST] action rejected with code $code: $message")
+        terminate(code, message)
+      case Failure(t: LoadBalancerException) =>
+        logging.error(this, s"[POST] failed in loadbalancer: ${t.getMessage}")
+        terminate(ServiceUnavailable)
+      case Failure(t: Throwable) =>
+        logging.error(this, s"[POST] action activation failed: ${t.getMessage}")
+        terminate(InternalServerError)
 
+    }
+  }
+
+  /**
+   * custom logging message for the controller to log request, activation id, activation result, response in one line
+   * @param req
+   * @param activation
+   * @param tid
+   * @return
+   */
+  protected def oneLineLogInfo(req: HttpRequest, activation: WhiskActivation)(
+    implicit tid: TransactionId): RouteResult => Option[LogEntry] = {
+    case RouteResult.Complete(res: HttpResponse) =>
+      val m = req.method.name
+      val p = req.uri.path.toString
+      val q = req.uri.query().toMap.toString()
+      val l = Logging.InfoLevel
+      val st = res.status.intValue.toString // http response status code
+      val aid = activation.activationId.asString
+      val ast = activation.response.statusCode // activation response status code
+      val name = "ActionsApi"
+
+      Some(LogEntry(
+        s"[$tid] [$name] requestMethod=$m requestPath='$p' requestParam=$q activationId=$aid activationResult=$ast httpResponse=$st",
+        l))
+
+    case _ => None // other kind of responses
+
+  }
+
+  private def entitleReferencedEntitiesMetaData(user: Identity, right: Privilege, exec: Option[ExecMetaDataBase])(
+    implicit transid: TransactionId) = {
+    exec match {
+      case Some(seq: SequenceExecMetaData) =>
+        logging.info(this, "checking if sequence components are accessible")
+        entitlementProvider.check(user, right, referencedEntities(seq), noThrottle = true)
+      case _ => Future.successful(true)
     }
   }
 
@@ -344,6 +293,31 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
   override def remove(user: Identity, entityName: FullyQualifiedEntityName)(implicit transid: TransactionId) = {
     deleteEntity(WhiskAction, entityStore, entityName.toDocId, (a: WhiskAction) => Future.successful({}))
   }
+
+  /**
+   * Gets action. The action name is prefixed with the namespace to create the primary index key.
+   *
+   * Responses are one of (Code, Message)
+   * - 200 WhiskAction has JSON
+   * - 404 Not Found
+   * - 500 Internal Server Error
+   */
+  override def fetch(user: Identity, entityName: FullyQualifiedEntityName, env: Option[Parameters])(
+    implicit transid: TransactionId) = {
+    parameter('code ? true) { code =>
+      //check if execute only is enabled, and if there is a discrepancy between the current user's namespace
+      //and that of the entity we are trying to fetch
+      if (executeOnly && user.namespace.name != entityName.namespace) {
+        terminate(Forbidden, forbiddenGetAction(entityName.path.asString))
+      } else {
+        fetchEntity(entityName, env, code)
+      }
+    }
+  }
+
+  /** Config flag for Execute Only for Actions in Shared Packages */
+  protected def executeOnly =
+    loadConfigOrThrow[Boolean](ConfigKeys.sharedPackageExecuteOnly)
 
   /** Checks for package binding case. we don't want to allow get for a package binding in shared package */
   private def fetchEntity(entityName: FullyQualifiedEntityName, env: Option[Parameters], code: Boolean)(
@@ -390,24 +364,112 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
   }
 
   /**
-   * Gets action. The action name is prefixed with the namespace to create the primary index key.
+   * Handles operations on action resources, which encompass these cases:
    *
-   * Responses are one of (Code, Message)
-   * - 200 WhiskAction has JSON
-   * - 404 Not Found
-   * - 500 Internal Server Error
+   * 1. ns/foo     -> subject must be authorized for one of { action(ns, *), action(ns, foo) },
+   *                  resource resolves to { action(ns, foo) }
+   *
+   * 2. ns/bar/foo -> where bar is a package
+   *                  subject must be authorized for one of { package(ns, *), package(ns, bar), action(ns.bar, foo) }
+   *                  resource resolves to { action(ns.bar, foo) }
+   *
+   * 3. ns/baz/foo -> where baz is a binding to ns'.bar
+   *                  subject must be authorized for one of { package(ns, *), package(ns, baz) }
+   *                  *and* one of { package(ns', *), package(ns', bar), action(ns'.bar, foo) }
+   *                  resource resolves to { action(ns'.bar, foo) }
+   *
+   * Note that package(ns, xyz) == action(ns.xyz, *) and if subject has rights to package(ns, xyz)
+   * then they also have rights to action(ns.xyz, *) since sharing is done at the package level and
+   * is not more granular; hence a check on action(ns.xyz, abc) is eschewed.
+   *
+   * Only list is supported for these resources:
+   *
+   * 4. ns/bar/    -> where bar is a package
+   *                  subject must be authorized for one of { package(ns, *), package(ns, bar) }
+   *                  resource resolves to { action(ns.bar, *) }
+   *
+   * 5. ns/baz/    -> where baz is a binding to ns'.bar
+   *                  subject must be authorized for one of { package(ns, *), package(ns, baz) }
+   *                  *and* one of { package(ns', *), package(ns', bar) }
+   *                  resource resolves to { action(ns.bar, *) }
    */
-  override def fetch(user: Identity, entityName: FullyQualifiedEntityName, env: Option[Parameters])(
-    implicit transid: TransactionId) = {
-    parameter('code ? true) { code =>
-      //check if execute only is enabled, and if there is a discrepancy between the current user's namespace
-      //and that of the entity we are trying to fetch
-      if (executeOnly && user.namespace.name != entityName.namespace) {
-        terminate(Forbidden, forbiddenGetAction(entityName.path.asString))
-      } else {
-        fetchEntity(entityName, env, code)
+  protected override def innerRoutes(user: Identity, ns: EntityPath)(implicit transid: TransactionId) = {
+    (entityPrefix & entityOps & requestMethod) { (segment, m) =>
+      entityname(segment) { outername =>
+        pathEnd {
+          // matched /namespace/collection/name
+          // this is an action in default package, authorize and dispatch
+          authorizeAndDispatch(m, user, Resource(ns, collection, Some(outername)))
+        } ~ (get & pathSingleSlash) {
+          // matched GET /namespace/collection/package-name/
+          // list all actions in package iff subject is entitled to READ package
+          val resource = Resource(ns, Collection(Collection.PACKAGES), Some(outername))
+          onComplete(entitlementProvider.check(user, Privilege.READ, resource)) {
+            case Success(_) => listPackageActions(user, FullyQualifiedEntityName(ns, EntityName(outername)))
+            case Failure(f) => super.handleEntitlementFailure(f)
+          }
+        } ~ (entityPrefix & pathEnd) { segment =>
+          entityname(segment) { innername =>
+            // matched /namespace/collection/package-name/action-name
+            // this is an action in a named package
+            val packageDocId = FullyQualifiedEntityName(ns, EntityName(outername)).toDocId
+            val packageResource = Resource(ns.addPath(EntityName(outername)), collection, Some(innername))
+
+            val right = collection.determineRight(m, Some(innername))
+            onComplete(entitlementProvider.check(user, right, packageResource)) {
+              case Success(_) =>
+                getEntity(WhiskPackage.get(entityStore, packageDocId), Some {
+                  if (right == Privilege.READ || right == Privilege.ACTIVATE) { wp: WhiskPackage =>
+                    val actionResource = Resource(wp.fullPath, collection, Some(innername))
+                    dispatchOp(user, right, actionResource)
+
+                  } else {
+                    // these packaged action operations do not need merging with the package,
+                    // but may not be permitted if this is a binding, or if the subject does
+                    // not have PUT and DELETE rights to the package itself
+                    (wp: WhiskPackage) =>
+                      wp.binding map { _ =>
+                        terminate(BadRequest, Messages.notAllowedOnBinding)
+                      } getOrElse {
+                        val actionResource = Resource(wp.fullPath, collection, Some(innername))
+                        dispatchOp(user, right, actionResource)
+                      }
+                  }
+                })
+              case Failure(f) => super.handleEntitlementFailure(f)
+            }
+          }
+        }
       }
     }
+  }
+
+  /**
+   * Lists actions in package or binding. The router authorized the subject for the package
+   * (if binding, then authorized subject for both the binding and the references package)
+   * and iff authorized, this method is reached to lists actions.
+   *
+   * Note that when listing actions in a binding, the namespace on the actions will be that
+   * of the referenced packaged, not the binding.
+   */
+  private def listPackageActions(user: Identity, pkgName: FullyQualifiedEntityName)(implicit transid: TransactionId) = {
+    // get the package to determine if it is a package or reference
+    // (this will set the appropriate namespace), and then list actions
+    // NOTE: these fetches are redundant with those from the authorization
+    // and should hit the cache to ameliorate the cost; this can be improved
+    // but requires communicating back from the authorization service the
+    // resolved namespace
+    getEntity(WhiskPackage.get(entityStore, pkgName.toDocId), Some { (wp: WhiskPackage) =>
+      val pkgns = wp.binding map { b =>
+        logging.debug(this, s"list actions in package binding '${wp.name}' -> '$b'")
+        b.namespace.addPath(b.name)
+      } getOrElse {
+        logging.debug(this, s"list actions in package '${wp.name}'")
+        pkgName.path.addPath(wp.name)
+      }
+      // list actions in resolved namespace
+      list(user, pkgns)
+    })
   }
 
   /**
@@ -488,16 +550,6 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
     exec match {
       case Some(seq: SequenceExec) =>
         logging.debug(this, "checking if sequence components are accessible")
-        entitlementProvider.check(user, right, referencedEntities(seq), noThrottle = true)
-      case _ => Future.successful(true)
-    }
-  }
-
-  private def entitleReferencedEntitiesMetaData(user: Identity, right: Privilege, exec: Option[ExecMetaDataBase])(
-    implicit transid: TransactionId) = {
-    exec match {
-      case Some(seq: SequenceExecMetaData) =>
-        logging.info(this, "checking if sequence components are accessible")
         entitlementProvider.check(user, right, referencedEntities(seq), noThrottle = true)
       case _ => Future.successful(true)
     }
@@ -606,34 +658,6 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
   }
 
   /**
-   * Lists actions in package or binding. The router authorized the subject for the package
-   * (if binding, then authorized subject for both the binding and the references package)
-   * and iff authorized, this method is reached to lists actions.
-   *
-   * Note that when listing actions in a binding, the namespace on the actions will be that
-   * of the referenced packaged, not the binding.
-   */
-  private def listPackageActions(user: Identity, pkgName: FullyQualifiedEntityName)(implicit transid: TransactionId) = {
-    // get the package to determine if it is a package or reference
-    // (this will set the appropriate namespace), and then list actions
-    // NOTE: these fetches are redundant with those from the authorization
-    // and should hit the cache to ameliorate the cost; this can be improved
-    // but requires communicating back from the authorization service the
-    // resolved namespace
-    getEntity(WhiskPackage.get(entityStore, pkgName.toDocId), Some { (wp: WhiskPackage) =>
-      val pkgns = wp.binding map { b =>
-        logging.debug(this, s"list actions in package binding '${wp.name}' -> '$b'")
-        b.namespace.addPath(b.name)
-      } getOrElse {
-        logging.debug(this, s"list actions in package '${wp.name}'")
-        pkgName.path.addPath(wp.name)
-      }
-      // list actions in resolved namespace
-      list(user, pkgns)
-    })
-  }
-
-  /**
    * Checks that the sequence is not cyclic and that the number of atomic actions in the "inlined" sequence is lower than max allowed.
    *
    * @param sequenceAction is the action sequence to check
@@ -669,6 +693,25 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
       case _: NoDocumentException      => Future failed RejectRequest(BadRequest, sequenceComponentNotFound)
     }
   }
+
+  implicit val stringToFiniteDuration: Unmarshaller[String, FiniteDuration] = {
+    Unmarshaller.strict[String, FiniteDuration] { value =>
+      val max = controllerActivationConfig.maxWaitForBlockingActivation.toMillis
+
+      Try { value.toInt } match {
+        case Success(i) if i > 0 && i <= max => i.milliseconds
+        case _ =>
+          throw new IllegalArgumentException(
+            Messages.invalidTimeout(controllerActivationConfig.maxWaitForBlockingActivation))
+      }
+    }
+  }
+
+  /** Custom unmarshaller for query parameters "limit" for "list" operations. */
+  private implicit val stringToListLimit: Unmarshaller[String, ListLimit] = RestApiCommons.stringToListLimit(collection)
+
+  /** Custom unmarshaller for query parameters "skip" for "list" operations. */
+  private implicit val stringToListSkip: Unmarshaller[String, ListSkip] = RestApiCommons.stringToListSkip(collection)
 
   /**
    * Counts the number of atomic actions in a sequence and checks for potential cycles. The latter is done
@@ -721,52 +764,6 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
       }
       totalActionCount
     }
-  }
-
-  /** Max atomic action count allowed for sequences. */
-  private lazy val actionSequenceLimit = whiskConfig.actionSequenceLimit.toInt
-
-  implicit val stringToFiniteDuration: Unmarshaller[String, FiniteDuration] = {
-    Unmarshaller.strict[String, FiniteDuration] { value =>
-      val max = controllerActivationConfig.maxWaitForBlockingActivation.toMillis
-
-      Try { value.toInt } match {
-        case Success(i) if i > 0 && i <= max => i.milliseconds
-        case _ =>
-          throw new IllegalArgumentException(
-            Messages.invalidTimeout(controllerActivationConfig.maxWaitForBlockingActivation))
-      }
-    }
-  }
-
-  /** Custom unmarshaller for query parameters "limit" for "list" operations. */
-  private implicit val stringToListLimit: Unmarshaller[String, ListLimit] = RestApiCommons.stringToListLimit(collection)
-
-  /** Custom unmarshaller for query parameters "skip" for "list" operations. */
-  private implicit val stringToListSkip: Unmarshaller[String, ListSkip] = RestApiCommons.stringToListSkip(collection)
-
-  /**
-   * custom logging message for the controller to log request, activation id, activation result, response in one line
-   * @param req
-   * @param activation
-   * @param tid
-   * @return
-   */
-  protected def oneLineLogInfo(req: HttpRequest,  activation:WhiskActivation )(implicit tid: TransactionId): RouteResult => Option[LogEntry] = {
-    case RouteResult.Complete(res: HttpResponse) =>
-      val m = req.method.name
-      val p = req.uri.path.toString
-      val q = req.uri.query().toMap.toString()
-      val l = Logging.InfoLevel
-      val st = res.status.intValue.toString  // http response status code
-      val aid = activation.activationId.asString
-      val ast = activation.response.statusCode  // activation response status code
-      val name = "ActionsApi"
-
-      Some(LogEntry(s"[$tid] [$name] requestMethod=$m requestPath='$p' requestParam=$q activationId=$aid activationResult=$ast httpResponse=$st", l))
-
-    case _ => None // other kind of responses
-
   }
 }
 
