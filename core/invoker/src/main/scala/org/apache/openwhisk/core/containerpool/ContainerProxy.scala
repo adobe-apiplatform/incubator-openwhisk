@@ -491,7 +491,8 @@ class ContainerProxy(factory: (TransactionId,
     // Failed at getting a container for a cold-start run
     // - container will be destroyed
     // - buffered will be aborted (if cold start container fails to start, we assume it will continue to fail)
-    case Event(_: FailureMessage, _) =>
+    case Event(f: FailureMessage, _) =>
+      implicit val tid: TransactionId = getTidFromCause(f.cause)
       logging.error(this, "Failed to start cold container, queued activations will be aborted.")
       activeCount -= 1
       context.parent ! ContainerRemoved(true)
