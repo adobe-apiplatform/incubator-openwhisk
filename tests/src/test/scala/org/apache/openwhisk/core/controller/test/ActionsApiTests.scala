@@ -1577,15 +1577,61 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     implicit val tid = transid()
     val action = WhiskAction(namespace, aname(), jsDefault("??"))
     put(entityStore, action)
-    Post(s"$collectionPath/${action.name}?blocking=true") ~> Route.seal(routes(creds)) ~> check {
-      status should be(Accepted)
-      val response = responseAs[JsObject]
-      response.fields("activationId") should not be None
-      headers should contain(RawHeader(ActivationIdHeader, response.fields("activationId").convertTo[String]))
-    }
-    stream.toString should include(s"[$tid] [ActionsApi] request= ")
+    val activation = WhiskActivation(
+      action.namespace,
+      action.name,
+      creds.subject,
+      activationIdFactory.make(),
+      start = Instant.now,
+      end = Instant.now,
+      response = ActivationResponse.success(Some(JsObject("test" -> "yes".toJson))))
 
-    stream.reset()
+    try {
+      // do not store the activation in the db, instead register it as the response to generate on active ack
+      loadBalancer.whiskActivationStub = Some((1.milliseconds, Right(activation)))
+
+      Post(s"$collectionPath/${action.name}?blocking=true") ~> Route.seal(routes(creds)) ~> check {
+        status should be(OK)
+        val response = responseAs[JsObject]
+        response.fields("activationId") should not be None
+        headers should contain(RawHeader(ActivationIdHeader, response.fields("activationId").convertTo[String]))
+      }
+      stream.toString should include(s"[$tid] [] [RequestSummaryLogger] requestMethod=")
+      stream.reset()
+    } finally {
+      loadBalancer.whiskActivationStub = None
+    }
+  }
+
+  it should "ensure one line controller log present while invoking a blocking action that fails" in {
+    implicit val tid = transid()
+    val action = WhiskAction(namespace, aname(), jsDefault("??"))
+    put(entityStore, action)
+    val activation = WhiskActivation(
+      action.namespace,
+      action.name,
+      creds.subject,
+      activationIdFactory.make(),
+      start = Instant.now,
+      end = Instant.now,
+      response = ActivationResponse.applicationError("oops"))
+
+    try {
+      // do not store the activation in the db, instead register it as the response to generate on active ack
+      loadBalancer.whiskActivationStub = Some((1.milliseconds, Right(activation)))
+
+      Post(s"$collectionPath/${action.name}?blocking=true") ~> Route.seal(routes(creds)) ~> check {
+        status should be(BadGateway)
+        val response = responseAs[JsObject]
+        response.fields("activationId") should not be None
+        headers should contain(RawHeader(ActivationIdHeader, response.fields("activationId").convertTo[String]))
+      }
+      stream.toString should include(s"[$tid] [] [RequestSummaryLogger] requestMethod=")
+      println(stream.toString)
+      stream.reset()
+    } finally {
+      loadBalancer.whiskActivationStub = None
+    }
   }
 
   it should "report proper error when record is corrupted on delete" in {
