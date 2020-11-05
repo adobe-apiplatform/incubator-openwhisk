@@ -18,12 +18,11 @@
 package org.apache.openwhisk.core.controller
 
 import akka.actor.ActorSystem
-import akka.event.Logging
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.http.scaladsl.server.{RequestContext, RouteResult}
-import akka.http.scaladsl.server.directives.{DebuggingDirectives, LogEntry}
+import akka.http.scaladsl.server.directives.{DebuggingDirectives, LoggingMagnet}
 import akka.http.scaladsl.unmarshalling._
 import org.apache.kafka.common.errors.RecordTooLargeException
 import org.apache.openwhisk.common.TransactionId
@@ -210,7 +209,8 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
         val response = if (result) activation.resultAsJson else activation.toExtendedJson()
 
         respondWithActivationIdHeader(activation.activationId) {
-          DebuggingDirectives.logRequestResult(oneLineLogInfo(_, activation)) {
+          DebuggingDirectives.logRequestResult(
+            LoggingMagnet(_ => RequestSummaryLogger(activation).printRequestMethodAndResponseStatus)) {
             if (activation.response.isSuccess) {
               complete(OK, response)
             } else if (activation.response.isApplicationError) {
@@ -246,31 +246,48 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
 
   /**
    * custom logging message for the controller to log request, activation id, activation result, response in one line
-   * @param req
    * @param activation
-   * @param tid
    * @return
    */
-  protected def oneLineLogInfo(req: HttpRequest, activation: WhiskActivation)(
-    implicit tid: TransactionId): RouteResult => Option[LogEntry] = {
-    case RouteResult.Complete(res: HttpResponse) =>
-      val m = req.method.name
-      val p = req.uri.path.toString
-      val q = req.uri.query().toMap.toString()
-      val l = Logging.InfoLevel
-      val st = res.status.intValue.toString // http response status code
-      val aid = activation.activationId.asString
-      val ast = activation.response.statusCode // activation response status code
-      val name = "ActionsApi"
-
-      Some(LogEntry(
-        s"[$tid] [$name] requestMethod=$m requestPath='$p' requestParam=$q activationId=$aid activationResult=$ast httpResponse=$st",
-        l))
-
-    case _ => None // other kind of responses
-
+  private case class RequestSummaryLogger(activation: WhiskActivation)(implicit tid: TransactionId) {
+    def printRequestMethodAndResponseStatus(req: HttpRequest)(res: RouteResult): Unit = {
+      res match {
+        case RouteResult.Complete(res: HttpResponse) =>
+          val m = req.method.name
+          val p = req.uri.path.toString
+          val q = req.uri.query().toMap.toString()
+          val st = res.status.intValue // http response status code
+          val aid = activation.activationId.asString
+          val ast = activation.response.statusCode // activation response status code
+          //val name = "ActionsApi"
+          logging.info(
+            this,
+            s"requestMethod=$m requestPath='$p' requestParam=$q activationId=$aid activationResult=$ast httpResponse=$st",
+          )
+        case _ =>
+        //nothing for now
+      }
+    }
   }
-
+  //  def printRequestMethodAndResponseStatus(req: HttpRequest)(res: RouteResult): Unit = {
+//    res match {
+//      case RouteResult.Complete(res: HttpResponse) =>
+//        val m = req.method.name
+//        val p = req.uri.path.toString
+//        val q = req.uri.query().toMap.toString()
+//        val l = Logging.InfoLevel
+//        val st = res.status.intValue.toString // http response status code
+//        val aid = activation.activationId.asString
+//        val ast = activation.response.statusCode // activation response status code
+//        val name = "ActionsApi"
+//        logging.info(
+//          this,
+//          s"[$transid] [$name] requestMethod=$m requestPath='$p' requestParam=$q activationId=$aid activationResult=$ast httpResponse=$st",
+//        )
+//      case _ =>
+//        ()
+//    }
+//  }
   private def entitleReferencedEntitiesMetaData(user: Identity, right: Privilege, exec: Option[ExecMetaDataBase])(
     implicit transid: TransactionId) = {
     exec match {
