@@ -196,7 +196,12 @@ case class WarmedData(override val container: Container,
 
 // Events received by the actor
 case class Start(exec: CodeExec[_], memoryLimit: ByteSize, ttl: Option[FiniteDuration] = None)
-case class Run(action: ExecutableWhiskAction, msg: ActivationMessage, retryLogDeadline: Option[Deadline] = None)
+case class Run(action: ExecutableWhiskAction,
+               msg: ActivationMessage,
+               retryLogDeadline: Option[Deadline] = None,
+               retryCount: Int = 0) {
+  def retry: Run = copy(retryCount = retryCount + 1)
+}
 case object Remove
 case class HealthPingEnabled(enabled: Boolean)
 
@@ -322,27 +327,31 @@ class ContainerProxy(factory: (TransactionId,
               PreWarmedData(container, job.action.exec.kind, job.action.limits.memory.megabytes.MB, 1, expires = None))
 
           case Failure(t) =>
-            // the container did not come up cleanly, so disambiguate the failure mode and then cleanup
-            // the failure is either the system fault, or for docker actions, the application/developer fault
-            val response = t match {
-              case WhiskContainerStartupError(msg) => ActivationResponse.whiskError(msg)
-              case BlackboxStartupError(msg)       => ActivationResponse.developerError(msg)
-              case _                               => ActivationResponse.whiskError(Messages.resourceProvisionError)
+            if (!handleRetry(job)) {
+              // the container did not come up cleanly, so disambiguate the failure mode and then cleanup
+              // the failure is either the system fault, or for docker actions, the application/developer fault
+              val response = t match {
+                case WhiskContainerStartupError(msg) => ActivationResponse.whiskError(msg)
+                case BlackboxStartupError(msg)       => ActivationResponse.developerError(msg)
+                case _                               => ActivationResponse.whiskError(Messages.resourceProvisionError)
+              }
+              val context = UserContext(job.msg.user)
+              // construct an appropriate activation and record it in the datastore,
+              // also update the feed and active ack; the container cleanup is queued
+              // implicitly via a FailureMessage which will be processed later when the state
+              // transitions to Running
+              val activation = ContainerProxy.constructWhiskActivation(job, None, Interval.zero, false, response)
+              println("ack4")
+
+              sendActiveAck(
+                transid,
+                activation,
+                job.msg.blocking,
+                job.msg.rootControllerIndex,
+                job.msg.user.namespace.uuid,
+                CombinedCompletionAndResultMessage(transid, activation, instance))
+              storeActivation(transid, activation, job.msg.blocking, context)
             }
-            val context = UserContext(job.msg.user)
-            // construct an appropriate activation and record it in the datastore,
-            // also update the feed and active ack; the container cleanup is queued
-            // implicitly via a FailureMessage which will be processed later when the state
-            // transitions to Running
-            val activation = ContainerProxy.constructWhiskActivation(job, None, Interval.zero, false, response)
-            sendActiveAck(
-              transid,
-              activation,
-              job.msg.blocking,
-              job.msg.rootControllerIndex,
-              job.msg.user.namespace.uuid,
-              CombinedCompletionAndResultMessage(transid, activation, instance))
-            storeActivation(transid, activation, job.msg.blocking, context)
         }
         .flatMap { container =>
           // now attempt to inject the user code and run the action
@@ -611,6 +620,30 @@ class ContainerProxy(factory: (TransactionId,
 
   initialize()
 
+  /**
+   * For async, retry-instead-of-fail is optional
+   * @param job
+   * @return
+   */
+  def handleRetry(job: Run)(implicit transid: TransactionId): Boolean = {
+    poolConfig.nonBlockingRetryConfig.exists { retryConfig =>
+      if (job.msg.blocking) {
+        false //blocking is never retried
+      } else if (job.retryCount <= retryConfig.retryLimit) {
+        logging.info(
+          this,
+          s"cold start failed for non-blocking activation ${job.msg.activationId}, it will be retried in ${retryConfig.delay.toSeconds} seconds.")
+        context.system.scheduler.scheduleOnce(retryConfig.delay, context.parent, job.retry)
+        true //nonblocking within retry limit
+      } else {
+        logging.info(
+          this,
+          s"cold start failed for non-blocking activation ${job.msg.activationId}, and retries exceeded limit ${retryConfig.retryLimit}")
+        false //nonblocking but exceeded retry limit
+      }
+    }
+  }
+
   /** Either process runbuffer or signal parent to send work; return true if runbuffer is being processed */
   def requestWork(newData: WarmedData): Boolean = {
     //if there is concurrency capacity, process runbuffer, signal NeedWork, or both
@@ -730,27 +763,29 @@ class ContainerProxy(factory: (TransactionId,
     logging.info(this, s"aborting ${runBuffer.length} queued activations after failed init or failed cold start")
     runBuffer.foreach { job =>
       implicit val tid = job.msg.transid
-      logging.info(
-        this,
-        s"aborting activation ${job.msg.activationId} after failed init or cold start with ${abortResponse}")
-      val result = ContainerProxy.constructWhiskActivation(
-        job,
-        None,
-        Interval.zero,
-        false,
-        abortResponse.getOrElse(ActivationResponse.whiskError(Messages.abnormalRun)))
-      val context = UserContext(job.msg.user)
-      val msg = if (job.msg.blocking) {
-        CombinedCompletionAndResultMessage(tid, result, instance)
-      } else {
-        CompletionMessage(tid, result, instance)
-      }
-      sendActiveAck(tid, result, job.msg.blocking, job.msg.rootControllerIndex, job.msg.user.namespace.uuid, msg)
-        .andThen {
-          case Failure(e) => logging.error(this, s"failed to send abort ack $e")
+      if (!handleRetry(job)) {
+        logging.info(
+          this,
+          s"aborting activation ${job.msg.activationId} after failed init or cold start with ${abortResponse}")
+        val result = ContainerProxy.constructWhiskActivation(
+          job,
+          None,
+          Interval.zero,
+          false,
+          abortResponse.getOrElse(ActivationResponse.whiskError(Messages.abnormalRun)))
+        val context = UserContext(job.msg.user)
+        val msg = if (job.msg.blocking) {
+          CombinedCompletionAndResultMessage(tid, result, instance)
+        } else {
+          CompletionMessage(tid, result, instance)
         }
-      storeActivation(tid, result, job.msg.blocking, context).andThen {
-        case Failure(e) => logging.error(this, s"failed to store aborted activation $e")
+        sendActiveAck(tid, result, job.msg.blocking, job.msg.rootControllerIndex, job.msg.user.namespace.uuid, msg)
+          .andThen {
+            case Failure(e) => logging.error(this, s"failed to send abort ack $e")
+          }
+        storeActivation(tid, result, job.msg.blocking, context).andThen {
+          case Failure(e) => logging.error(this, s"failed to store aborted activation $e")
+        }
       }
     }
   }

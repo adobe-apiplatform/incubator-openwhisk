@@ -127,6 +127,7 @@ class ContainerProxyTests
     content = Some(activationArguments),
     initArgs = Set("ENV_VAR"))
 
+  val blockingMessage = message.copy(blocking = true)
   /*
    * Helpers for assertions and actor lifecycles
    */
@@ -275,7 +276,9 @@ class ContainerProxyTests
     (transid: TransactionId, activation: WhiskActivation, isBlockingActivation: Boolean, context: UserContext) =>
       Future.successful(())
   }
-  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, 1.minute, None, 100)
+  val poolConfig = ContainerPoolConfig(2.MB, 0.5, false, 1.minute, None, 100, None)
+  val retryingPoolConfig =
+    ContainerPoolConfig(2.MB, 0.5, false, 1.minute, None, 100, Some(NonblockingRetryConfig(100.milliseconds, 2)))
   def healthchecksConfig(enabled: Boolean = false) = ContainerProxyHealthCheckConfig(enabled, 100.milliseconds, 2)
   val filterEnvVar = (k: String) => Character.isUpperCase(k.charAt(0))
 
@@ -1046,7 +1049,7 @@ class ContainerProxyTests
         .convertTo[Int] shouldBe initInterval.duration.toMillis
     }
   }
-  it should "terminate buffered concurrent activations when prewarm init fails with an error" in {
+  it should "terminate buffered concurrent blocking activations when prewarm init fails with an error" in {
     assume(Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean))
 
     val initPromise = Promise[Interval]()
@@ -1276,7 +1279,7 @@ class ContainerProxyTests
     }
   }
 
-  it should "terminate buffered concurrent activations when cold init fails to launch container" in {
+  it should "terminate buffered concurrent activations when cold init fails to launch container for blocking activations" in {
     assume(Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean))
 
     val initPromise = Promise[Interval]()
@@ -1323,6 +1326,116 @@ class ContainerProxyTests
       store.calls should have size 2
 
       //we should have 2 activations that are whisk error
+      acker.calls.filter(_._2.response.isWhiskError) should have size 2
+    }
+  }
+
+  it should "retry nonblocking buffered concurrent activations when cold init fails to launch container" in {
+    assume(Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean))
+
+    val initPromise = Promise[Interval]()
+    val container = new TestContainer(Some(initPromise))
+    val factory = createFactory(Future.failed(new Exception("simulating a container creation failure")))
+    val acker = createSyncAcker(concurrentAction)
+    val store = createSyncStore
+    val collector =
+      createCollector(Future.successful(ActivationLogs()), () => container.logs(0.MB, false)(TransactionId.testing))
+
+    val machine =
+      childActorOf(
+        ContainerProxy
+          .props(
+            factory,
+            acker,
+            store,
+            collector,
+            InvokerInstanceId(0, userMemory = defaultUserMemory),
+            retryingPoolConfig,
+            healthchecksConfig(),
+            pauseGrace = pauseGrace)
+          .withDispatcher(CallingThreadDispatcher.Id))
+    registerCallback(machine)
+    //no prewarming
+
+    val msg1 = Run(concurrentAction, message, retryCount = 2)
+    val msg2 = Run(concurrentAction, message, retryCount = 2)
+    machine ! msg1 //first in Uninitialized state
+    machine ! msg2 //second in Uninitialized or Running state
+
+    expectMsg(Transition(machine, Uninitialized, Running))
+
+    expectMsg(ContainerRemoved(true))
+    //go to Removing state when a failure happens while others are in flight
+    //expectNoMessage(100.milliseconds)
+    expectMsg(msg1.copy(retryCount = 3))
+    expectMsg(msg2.copy(retryCount = 3))
+
+    awaitAssert {
+      factory.calls should have size 1
+      container.initializeCount shouldBe 0
+      container.runCount shouldBe 0
+      container.atomicLogsCount.get() shouldBe 0
+      container.suspendCount shouldBe 0
+      container.resumeCount shouldBe 0
+      acker.calls should have size 0
+
+      store.calls should have size 0
+
+      //we should have 0 activations that are whisk error
+      acker.calls.filter(_._2.response.isWhiskError) should have size 0
+    }
+  }
+
+  it should "retry nonblocking buffered concurrent activations up to limit when cold init fails to launch container" in {
+    assume(Option(WhiskProperties.getProperty("whisk.action.concurrency")).exists(_.toBoolean))
+
+    val initPromise = Promise[Interval]()
+    val container = new TestContainer(Some(initPromise))
+    val factory = createFactory(Future.failed(new Exception("simulating a container creation failure")))
+    val acker = createSyncAcker(concurrentAction)
+    val store = createSyncStore
+    val collector =
+      createCollector(Future.successful(ActivationLogs()), () => container.logs(0.MB, false)(TransactionId.testing))
+
+    val machine =
+      childActorOf(
+        ContainerProxy
+          .props(
+            factory,
+            acker,
+            store,
+            collector,
+            InvokerInstanceId(0, userMemory = defaultUserMemory),
+            retryingPoolConfig,
+            healthchecksConfig(),
+            pauseGrace = pauseGrace)
+          .withDispatcher(CallingThreadDispatcher.Id))
+    registerCallback(machine)
+    //no prewarming
+
+    val msg1 = Run(concurrentAction, message, retryCount = 3)
+    val msg2 = Run(concurrentAction, message, retryCount = 3)
+    machine ! msg1 //first in Uninitialized state
+    machine ! msg2 //second in Uninitialized or Running state
+
+    expectMsg(Transition(machine, Uninitialized, Running))
+
+    expectMsg(ContainerRemoved(true))
+    //go to Removing state when a failure happens while others are in flight
+    expectNoMessage(100.milliseconds)
+
+    awaitAssert {
+      factory.calls should have size 1
+      container.initializeCount shouldBe 0
+      container.runCount shouldBe 0
+      container.atomicLogsCount.get() shouldBe 0
+      container.suspendCount shouldBe 0
+      container.resumeCount shouldBe 0
+      acker.calls should have size 2
+
+      store.calls should have size 2
+
+      //we should have 0 activations that are whisk error
       acker.calls.filter(_._2.response.isWhiskError) should have size 2
     }
   }
@@ -1417,7 +1530,7 @@ class ContainerProxyTests
   /*
    * ERROR CASES
    */
-  it should "complete the transaction and abort if container creation fails" in within(timeout) {
+  it should "complete the transaction and abort if container creation fails for blocking activation" in within(timeout) {
     val container = new TestContainer
     val factory = createFactory(Future.failed(new Exception()))
     val acker = createAcker()
@@ -1451,6 +1564,84 @@ class ContainerProxyTests
       val activation = acker.calls(0)._2
       activation.response should be a 'whiskError
       activation.annotations.get(WhiskActivation.initTimeAnnotation) shouldBe empty
+      store.calls should have size 1
+    }
+  }
+
+  it should "complete the transaction and retry if container creation fails for nonblocking activation" in within(
+    timeout) {
+    val container = new TestContainer
+    val factory = createFactory(Future.failed(new Exception()))
+    val acker = createAcker()
+    val store = createStore
+    val collector = createCollector()
+
+    val machine =
+      childActorOf(
+        ContainerProxy
+          .props(
+            factory,
+            acker,
+            store,
+            collector,
+            InvokerInstanceId(0, userMemory = defaultUserMemory),
+            retryingPoolConfig,
+            healthchecksConfig(),
+            pauseGrace = pauseGrace))
+    registerCallback(machine)
+    val msg1 = Run(action, message, retryCount = 2)
+    machine ! msg1
+    expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerRemoved(true))
+    //wait for retry
+    expectMsg(msg1.copy(retryCount = 3))
+
+    awaitAssert {
+      factory.calls should have size 1
+      container.initializeCount shouldBe 0
+      container.runCount shouldBe 0
+      collector.calls should have size 0 // gather no logs
+      container.destroyCount shouldBe 0 // no destroying possible as no container could be obtained
+      acker.calls should have size 0
+      store.calls should have size 0
+    }
+  }
+
+  it should "complete the transaction and retry to limit if container creation fails for nonblocking activation" in within(
+    timeout) {
+    val container = new TestContainer
+    val factory = createFactory(Future.failed(new Exception()))
+    val acker = createAcker()
+    val store = createStore
+    val collector = createCollector()
+
+    val machine =
+      childActorOf(
+        ContainerProxy
+          .props(
+            factory,
+            acker,
+            store,
+            collector,
+            InvokerInstanceId(0, userMemory = defaultUserMemory),
+            retryingPoolConfig,
+            healthchecksConfig(),
+            pauseGrace = pauseGrace))
+    registerCallback(machine)
+    val msg1 = Run(action, message, retryCount = 3)
+    machine ! msg1
+    expectMsg(Transition(machine, Uninitialized, Running))
+    expectMsg(ContainerRemoved(true))
+
+    expectNoMessage(100.milliseconds)
+
+    awaitAssert {
+      factory.calls should have size 1
+      container.initializeCount shouldBe 0
+      container.runCount shouldBe 0
+      collector.calls should have size 0 // gather no logs
+      container.destroyCount shouldBe 0 // no destroying possible as no container could be obtained
+      acker.calls should have size 1
       store.calls should have size 1
     }
   }

@@ -49,7 +49,8 @@ case class ContainerPoolConfig(userMemory: ByteSize,
                                akkaClient: Boolean,
                                prewarmExpirationCheckInterval: FiniteDuration,
                                prewarmExpirationCheckIntervalVariance: Option[FiniteDuration],
-                               prewarmExpirationLimit: Int) {
+                               prewarmExpirationLimit: Int,
+                               nonBlockingRetryConfig: Option[NonblockingRetryConfig]) {
   require(
     concurrentPeekFactor > 0 && concurrentPeekFactor <= 1.0,
     s"concurrentPeekFactor must be > 0 and <= 1.0; was $concurrentPeekFactor")
@@ -67,6 +68,8 @@ case class ContainerPoolConfig(userMemory: ByteSize,
   def cpuShare(reservedMemory: ByteSize) =
     max((totalShare / (userMemory.toBytes / reservedMemory.toBytes)).toInt, 2) // The minimum allowed cpu-shares is 2
 }
+
+case class NonblockingRetryConfig(delay: FiniteDuration, retryLimit: Int)
 
 case class RuntimesRegistryCredentials(user: String, password: String)
 
