@@ -98,10 +98,19 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
    * Finally, a configurable duration is added to the diluted timeout to be lenient towards general delays / wait times.
    *
    * @param actionTimeLimit the action's time limit
+   * @param blocking allow separate time limit calculation for blocking
    * @return the calculated time duration within which a completion ack must be received
    */
-  private def calculateCompletionAckTimeout(actionTimeLimit: FiniteDuration): FiniteDuration = {
-    (actionTimeLimit.max(TimeLimit.STD_DURATION) * lbConfig.timeoutFactor) + lbConfig.timeoutAddon
+  private def calculateCompletionAckTimeout(blocking: Boolean, actionTimeLimit: FiniteDuration): FiniteDuration = {
+    val (timeoutFactor, timeoutAddon) = if (blocking) {
+      (lbConfig.timeoutFactor, lbConfig.timeoutAddon)
+    } else {
+      //for nonblocking, use the nonblocking-specific config, or else default to the blocking config
+      lbConfig.nonblockingTimeoutOption
+        .map(t => (t.timeoutFactor, t.timeoutAddon))
+        .getOrElse((lbConfig.timeoutFactor, lbConfig.timeoutAddon))
+    }
+    (actionTimeLimit.max(TimeLimit.STD_DURATION) * timeoutFactor) + timeoutAddon
   }
 
   /**
@@ -127,7 +136,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
     activationsPerNamespace.getOrElseUpdate(msg.user.namespace.uuid, new LongAdder()).increment()
 
     // Completion Ack must be received within the calculated time.
-    val completionAckTimeout = calculateCompletionAckTimeout(action.limits.timeout.duration)
+    val completionAckTimeout = calculateCompletionAckTimeout(msg.blocking, action.limits.timeout.duration)
 
     // If activation is blocking, store a promise that we can mark successful later on once the result ack
     // arrives. Return a Future representing the promise to caller.
@@ -307,7 +316,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
             .foreach(_.tryFailure(new Throwable("no completion or active ack received yet")))
           val actionType = if (entry.isBlackbox) "blackbox" else "managed"
           val blockingType = if (entry.isBlocking) "blocking" else "non-blocking"
-          val completionAckTimeout = calculateCompletionAckTimeout(entry.timeLimit)
+          val completionAckTimeout = calculateCompletionAckTimeout(entry.isBlocking, entry.timeLimit)
           logging.warn(
             this,
             s"forced completion ack for '$aid', action '${entry.fullyQualifiedEntityName}' ($actionType), $blockingType, mem limit ${entry.memoryLimit.toMB} MB, time limit ${entry.timeLimit.toMillis} ms, completion ack timeout $completionAckTimeout from $instance")(

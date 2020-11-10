@@ -601,7 +601,10 @@ case class ClusterConfig(useClusterBootstrap: Boolean)
 case class ShardingContainerPoolBalancerConfig(managedFraction: Double,
                                                blackboxFraction: Double,
                                                timeoutFactor: Int,
-                                               timeoutAddon: FiniteDuration)
+                                               timeoutAddon: FiniteDuration,
+                                               nonblockingTimeoutOption: Option[NonblockingTimeoutConfig])
+
+case class NonblockingTimeoutConfig(timeoutFactor: Int, timeoutAddon: FiniteDuration)
 
 /**
  * State kept for each activation slot until completion.

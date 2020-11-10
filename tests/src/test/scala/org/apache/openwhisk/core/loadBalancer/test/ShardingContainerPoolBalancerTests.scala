@@ -100,7 +100,8 @@ class ShardingContainerPoolBalancerTests
       managedFraction.getOrElse(1.0 - blackboxFraction),
       blackboxFraction,
       1,
-      1.minute)
+      1.minute,
+      None)
 
   it should "update invoker's state, growing the slots data and keeping valid old data" in {
     // start empty
